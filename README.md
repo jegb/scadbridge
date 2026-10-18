@@ -162,6 +162,47 @@ Compile** in OpenSCAD to refresh its view automatically.
 Unsupported features produce explicit diagnostics. Generated source never silently falls
 back to an imported mesh.
 
+## UAT checklist
+
+Apply the operation in SolidCraft, then use **Compile SCAD**, **Validate** and **Update SCAD**.
+Volumes are for the stated fixtures and will differ for other dimensions.
+
+| Operation | Fixture | Expected volume | Status |
+|---|---|---:|---|
+| Sketch | Rectangle sketch | 2D `polygon()` module | PASS |
+| Extrude | Rectangle 0-5, height 5 | 125 mm³ | PASS |
+| Extrude cut | 5×5×5 cut into the 20 mm cube | 7875 mm³ | PASS |
+| Sphere | Radius 10 | 4188.49 mm³ | PASS |
+| Sphere cut | Radius 5 at the cube corner | 7934.57 mm³ | PASS |
+| Cube + separate sphere | Cube plus radius 5 sphere as a second body | 8523.56 mm³ | PASS |
+| Sphere in a component | Sphere created inside Component1, moved, root activated | 8523.56 mm³ | PASS |
+| Hole | 5 mm vertical through hole | 7607.37 mm³ | PASS |
+| Counterbore | 5 mm hole with 10 × 3 counterbore | 7430.82 mm³ | PASS |
+| Chamfer | 2 mm on any box edge | 7960 mm³ | PASS |
+| Fillet | 2 mm on a box edge | 7982.82 mm³ | PASS |
+| Fillet after hole | 5 mm hole, then 2 mm fillet | 7590.18 mm³ | PASS |
+| Fillet after shell | 2 mm shell + 2 mm fillet | 3374.82 mm³ | PASS |
+| Fillet on extrusion | 20 mm extruded square + 2 mm fillet | 7982.82 mm³ | PASS |
+| Shell | 2 mm, +X face open | 3392 mm³ | PASS |
+| Boolean cut | 6 mm cylinder through | 7434.61 mm³ | PASS |
+| Boolean join | Extruded body joined to the cube | Union | PASS |
+| Torus | Major 10, minor 2 | 789.45 mm³ | PASS |
+| Mirror | YZ, combine with original | 16000 mm³ | PASS |
+| Rectangular pattern | 2 copies, 20 mm spacing | 16000 mm³ | PASS |
+| Circular pattern | 4 copies, 360° | 32000 mm³ | PASS |
+| Coil | 20 mm, 5 turns, 50 mm, 2 mm wire | 986.47 mm³ | PASS (2% volume tolerance) |
+| Bounding solid | Cube + 2 mm margin | 21824 mm³ | PASS |
+| Revolve | — | — | Not yet |
+| Sweep / Loft | — | — | Not yet |
+| Pipe / Thread | — | — | Not yet |
+| Boundary fill / Rib / Web / Emboss | — | — | Not yet |
+| Pattern on path | — | — | Not yet |
+| Sketch arcs, splines, holes | — | — | Not yet |
+| Multi-profile extrusions | — | — | Not yet |
+
+Multi-body results (patterns, bounding solids) are validated body by body, matching SolidCraft's
+per-body measurements.
+
 ## Validation and tests
 
 ```bash

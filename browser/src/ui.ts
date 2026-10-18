@@ -3,7 +3,7 @@ import {
   validateCurrentDesign,
 } from './demo';
 import { updateScad } from './import';
-import { inspectDesign } from './solidcraft';
+import { getApi, inspectDesign } from './solidcraft';
 import { openScadSource } from './import';
 import type { Diagnostic } from './ir';
 import { openScadWasmUrl } from './validate';
@@ -26,7 +26,9 @@ const STYLE = `
   z-index: 2147483000;
   overflow: hidden;
 }
+.scadb-panel { transition: transform 0.15s ease, opacity 0.15s ease; }
 .scadb-panel.collapsed { width: 150px; }
+.scadb-panel.scadb-occluded { transform: translateX(calc(100% + 24px)); opacity: 0; pointer-events: none; }
 .scadb-panel.collapsed .scadb-status { display: none; }
 .scadb-panel.collapsed .scadb-body { display: none; }
 .scadb-head {
@@ -309,6 +311,15 @@ export function mountPanel(): Panel {
       });
     } else if (action === 'validate') {
       void run('Validate', async () => {
+        const inspection = await inspectDesign(true);
+        if (inspection.bodies.length === 0) {
+          append(
+            'Nothing to validate: the design has no bodies. Open a SCAD file or create a body.',
+          );
+          status.textContent = 'empty';
+          dot.className = 'scadb-dot';
+          return;
+        }
         const result = await validateCurrentDesign();
         refreshCode(result.scad.code);
         showDiagnostics(result.validation.diagnostics);
@@ -324,6 +335,15 @@ export function mountPanel(): Panel {
       });
     } else if (action === 'update') {
       void run('Update SCAD', async () => {
+        const inspection = await inspectDesign(true);
+        if (inspection.bodies.length === 0) {
+          append(
+            'Nothing to update: the design has no bodies. Open a SCAD file or create a body.',
+          );
+          status.textContent = 'empty';
+          dot.className = 'scadb-dot';
+          return;
+        }
         const result = await updateScad();
         if (result.cancelled) {
           append('Update cancelled.');
@@ -366,6 +386,28 @@ export function mountPanel(): Panel {
   const build = required<HTMLElement>('scadb-build');
   const moduleMatch = new URL(import.meta.url).pathname.match(/scadbridge-([a-f0-9]+)\.js/);
   build.textContent = `commit ${moduleMatch ? moduleMatch[1] : 'dev'}`;
+
+  let occluded = false;
+  const checkOcclusion = async () => {
+    try {
+      const state = (await getApi().request('ui.inspect')) as {
+        dialog?: unknown;
+        file_picker_busy?: boolean;
+        file_dialog_open?: boolean;
+      };
+      const blocked =
+        Boolean(state?.dialog) ||
+        state?.file_picker_busy === true ||
+        state?.file_dialog_open === true;
+      if (blocked !== occluded) {
+        occluded = blocked;
+        panel.classList.toggle('scadb-occluded', blocked);
+      }
+    } catch {
+      // The app can be busy while a dialog is open; keep the current state.
+    }
+  };
+  setInterval(checkOcclusion, 400);
 
   append(
     `SCADBridge ready. Use SolidCraft File > Open... to load a .scad model. Validation: ${openScadWasmUrl()}`,

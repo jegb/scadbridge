@@ -1,10 +1,11 @@
 import type {
+  BodyMeasurement,
   DesignInspection,
   FeatureInspection,
   JsonValue,
   SketchInspection,
 } from './types';
-import { inspectFeature, inspectSketch } from './solidcraft';
+import { inspectFeature, inspectSketch, listComponents, measureBodies } from './solidcraft';
 import type {
   BoxFeature,
   ChamferFeature,
@@ -15,6 +16,12 @@ import type {
   FeatureIR,
   FilletFeature,
   ExtrudeFeature,
+  TorusFeature,
+  MirrorFeature,
+  RectangularPatternFeature,
+  CircularPatternFeature,
+  CoilFeature,
+  BoundingSolidFeature,
   HoleFeature,
   MoveFeature,
   ParamIR,
@@ -299,6 +306,163 @@ export function extractFeature(
       };
       return feature;
     }
+    case 'TorusFeature': {
+      const major = asString(definition.major);
+      const minor = asString(definition.minor);
+      if (!major || !minor) {
+        return unsupported(base, definition, diagnostics, 'Torus is missing a radius.');
+      }
+      const feature: TorusFeature = {
+        ...base,
+        kind: 'torus',
+        bodies: bodyNames(definition),
+        major,
+        minor,
+        center: asVec3(definition.center) ?? ['0', '0', '0'],
+        operation: asString(definition.operation) ?? 'new_body',
+        targets: asStrings(definition.targets),
+        raw: definition,
+      };
+      return feature;
+    }
+    case 'MirrorFeature': {
+      const bodies = asStrings(definition.bodies);
+      const plane = definition.plane;
+      let normal: Vec3Expr | undefined;
+      let origin: Vec3Expr = ['0', '0', '0'];
+      if (plane && typeof plane === 'object' && !Array.isArray(plane)) {
+        const p = plane as Record<string, JsonValue>;
+        const type = asString(p.type);
+        if (type === 'origin') {
+          const name = asString(p.name);
+          normal = name === 'YZ' ? ['1', '0', '0'] : name === 'XZ' ? ['0', '1', '0'] : name === 'XY' ? ['0', '0', '1'] : undefined;
+        } else {
+          origin = asVec3(p.origin) ?? origin;
+          normal = asVec3(p.normal) ?? undefined;
+          if (!normal) {
+            const xDir = asVec3(p.x_dir);
+            const yDir = asVec3(p.y_dir);
+            if (xDir && yDir) {
+              const x = xDir.map((v) => Number(v));
+              const y = yDir.map((v) => Number(v));
+              if (x.every(Number.isFinite) && y.every(Number.isFinite)) {
+                normal = [
+                  String(x[1] * y[2] - x[2] * y[1]),
+                  String(x[2] * y[0] - x[0] * y[2]),
+                  String(x[0] * y[1] - x[1] * y[0]),
+                ];
+              }
+            }
+          }
+        }
+      }
+      if (!normal) {
+        return unsupported(base, definition, diagnostics, 'Mirror plane is not supported.');
+      }
+      const feature: MirrorFeature = {
+        ...base,
+        kind: 'mirror',
+        bodies,
+        combine: definition.combine === true,
+        normal,
+        origin,
+        raw: definition,
+      };
+      return feature;
+    }
+    case 'RectangularPatternFeature': {
+      const patternValue = definition.pattern;
+      const pattern =
+        patternValue && typeof patternValue === 'object' && !Array.isArray(patternValue)
+          ? (patternValue as Record<string, JsonValue>)
+          : {};
+      const dir1 = asVec3(pattern.dir1);
+      const count1 = asString(pattern.count1);
+      const spacing1 = asString(pattern.spacing1);
+      if (!dir1 || !count1 || !spacing1) {
+        return unsupported(base, definition, diagnostics, 'Rectangular pattern is incomplete.');
+      }
+      const feature: RectangularPatternFeature = {
+        ...base,
+        kind: 'pattern_rect',
+        bodies: asStrings(definition.bodies),
+        dir1,
+        count1,
+        spacing1,
+        dir2: asVec3(pattern.dir2),
+        count2: asString(pattern.count2),
+        spacing2: asString(pattern.spacing2),
+        raw: definition,
+      };
+      return feature;
+    }
+    case 'CircularPatternFeature': {
+      const patternValue = definition.pattern;
+      const pattern =
+        patternValue && typeof patternValue === 'object' && !Array.isArray(patternValue)
+          ? (patternValue as Record<string, JsonValue>)
+          : {};
+      const axis = asVec3(pattern.axis);
+      const count = asString(pattern.count);
+      const angle = asString(pattern.angle) ?? '360';
+      if (!axis || !count) {
+        return unsupported(base, definition, diagnostics, 'Circular pattern is incomplete.');
+      }
+      const feature: CircularPatternFeature = {
+        ...base,
+        kind: 'pattern_circ',
+        bodies: asStrings(definition.bodies),
+        axis,
+        origin: asVec3(pattern.origin) ?? ['0', '0', '0'],
+        count,
+        angle,
+        raw: definition,
+      };
+      return feature;
+    }
+    case 'CoilFeature': {
+      const diameter = asString(definition.diameter);
+      const turns = asString(definition.turns);
+      const pitch = asString(definition.pitch);
+      const sectionSize = asString(definition.section_size);
+      if (!diameter || !turns || !pitch || !sectionSize) {
+        return unsupported(base, definition, diagnostics, 'Coil is missing its profile.');
+      }
+      const feature: CoilFeature = {
+        ...base,
+        kind: 'coil',
+        bodies: bodyNames(definition),
+        diameter,
+        height: `(${pitch}) * (${turns})`,
+        turns,
+        sectionSize,
+        section: asString(definition.section) ?? 'circular',
+        base: asVec3(definition.base) ?? ['0', '0', '0'],
+        axis: asVec3(definition.axis) ?? ['0', '0', '1'],
+        startAngle: asString(definition.start_angle),
+        clockwise: definition.clockwise === true,
+        operation: asString(definition.operation) ?? 'new_body',
+        targets: asStrings(definition.targets),
+        raw: definition,
+      };
+      return feature;
+    }
+    case 'BoundingSolidFeature': {
+      const targets = asStrings(definition.bodies);
+      const bodies = bodyNames(definition);
+      if (bodies.length === 0) {
+        return unsupported(base, definition, diagnostics, 'Bounding solid has no output body.');
+      }
+      const feature: BoundingSolidFeature = {
+        ...base,
+        kind: 'bounding',
+        bodies,
+        targetBodies: targets,
+        margin: asString(definition.margin),
+        raw: definition,
+      };
+      return feature;
+    }
     default:
       return unsupported(
         base,
@@ -493,6 +657,91 @@ function bodyNamesOf(definition: Record<string, JsonValue>): string[] {
   return asStrings(definition.body_names);
 }
 
+function inferPrimitive(
+  body: BodyMeasurement,
+  id: number,
+  diagnostics: Diagnostic[],
+): FeatureIR | null {
+  const size = [
+    body.bbox.max[0] - body.bbox.min[0],
+    body.bbox.max[1] - body.bbox.min[1],
+    body.bbox.max[2] - body.bbox.min[2],
+  ];
+  const center = [
+    (body.bbox.max[0] + body.bbox.min[0]) / 2,
+    (body.bbox.max[1] + body.bbox.min[1]) / 2,
+    (body.bbox.max[2] + body.bbox.min[2]) / 2,
+  ];
+  const faces = body.faces ?? 0;
+  const edges = body.edges ?? 0;
+  const vertices = body.vertices ?? 0;
+  const base = { id, name: `Inferred ${body.name}`, type: 'InferredBody' };
+  const uniform = (values: number[], tolerance = 1e-6) =>
+    Math.abs(values[0] - values[1]) <= tolerance &&
+    Math.abs(values[1] - values[2]) <= tolerance;
+
+  if (faces === 1 && edges === 0 && vertices === 0 && uniform(size)) {
+    return {
+      ...base,
+      kind: 'sphere',
+      bodies: [body.name],
+      radius: String(size[0] / 2),
+      center: center.map(String) as Vec3Expr,
+      operation: 'new_body',
+      raw: { inferred: true },
+    };
+  }
+  if (faces === 6 && edges === 12 && vertices === 8) {
+    const bboxVolume = size[0] * size[1] * size[2];
+    if (bboxVolume > 0 && Math.abs((body.volume_mm3 ?? 0) - bboxVolume) / bboxVolume < 1e-6) {
+      return {
+        ...base,
+        kind: 'box',
+        bodies: [body.name],
+        length: String(size[0]),
+        width: String(size[1]),
+        height: String(size[2]),
+        corner: body.bbox.min.map(String) as Vec3Expr,
+        operation: 'new_body',
+        raw: { inferred: true },
+      };
+    }
+  }
+  if (faces === 3 && edges === 2 && vertices === 0) {
+    const equal = (a: number, b: number) => Math.abs(a - b) <= Math.max(a, b) * 1e-6;
+    let axis = -1;
+    if (equal(size[0], size[1])) axis = 2;
+    else if (equal(size[0], size[2])) axis = 1;
+    else if (equal(size[1], size[2])) axis = 0;
+    if (axis !== -1) {
+      const height = size[axis];
+      const radius = size[(axis + 1) % 3] / 2;
+      const basePoint = [...center];
+      basePoint[axis] = body.bbox.min[axis];
+      const axisVector: Vec3Expr = ['0', '0', '0'];
+      axisVector[axis] = '1';
+      return {
+        ...base,
+        kind: 'cylinder',
+        bodies: [body.name],
+        radius: String(radius),
+        height: String(height),
+        base: basePoint.map(String) as Vec3Expr,
+        axis: axisVector,
+        operation: 'new_body',
+        raw: { inferred: true },
+      };
+    }
+  }
+  diagnostics.push({
+    code: 'W132',
+    severity: 'warning',
+    message: `Body ${body.name} is inside a component but is not a recognized primitive; it was not translated.`,
+  });
+  return null;
+}
+
+
 export async function extractPart(
   inspection: DesignInspection,
   options: { includeSuppressed?: boolean } = {},
@@ -510,27 +759,47 @@ export async function extractPart(
   const referenced = new Set<string>();
   for (const detail of details.values()) {
     const definition = detail.definition ?? {};
-    if (detail.type === 'CombineFeature') {
-      const target = asString(definition.target);
-      if (target) referenced.add(target);
-      for (const tool of asStrings(definition.tools)) referenced.add(tool);
-    } else {
-      const operation = asString(definition.operation);
-      if (operation === 'join' || operation === 'cut' || operation === 'intersect') {
-        for (const target of asStrings(definition.participants)) referenced.add(target);
-        for (const target of asStrings(definition.targets)) referenced.add(target);
-      }
-    }
+    // Every feature that names an existing body makes that body a dependency.
+    const references = [
+      ...asStrings(definition.bodies),
+      ...asStrings(definition.tools),
+      ...asStrings(definition.participants),
+      ...asStrings(definition.targets),
+    ];
+    const body = asString(definition.body);
+    if (body) references.push(body);
+    const target = asString(definition.target);
+    if (target) references.push(target);
+    for (const name of references) referenced.add(name);
   }
 
   for (const item of inspection.timeline) {
-    if (item.rolled_back) continue;
     const detail = details.get(item.id);
     if (!detail) continue;
+    if (item.rolled_back) {
+      diagnostics.push({
+        code: 'W131',
+        severity: 'warning',
+        message: `Skipped rolled-back feature ${item.name} (${item.type}); bodies: ${bodyNamesOf(detail.definition ?? {}).join(', ') || 'none'}.`,
+        featureId: item.id,
+        featureName: item.name,
+      });
+      continue;
+    }
+    if (item.type === 'BodyTransferFeature') continue;
     if (item.suppressed && !options.includeSuppressed) {
       const bodies = bodyNamesOf(detail.definition ?? {});
       const needed = bodies.some((name) => referenced.has(name));
-      if (!needed) continue;
+      if (!needed) {
+        diagnostics.push({
+          code: 'W131',
+          severity: 'warning',
+          message: `Skipped suppressed feature ${item.name} (${item.type}); bodies: ${bodies.join(', ') || 'none'}.`,
+          featureId: item.id,
+          featureName: item.name,
+        });
+        continue;
+      }
     }
     if (item.error) {
       diagnostics.push({
@@ -555,6 +824,42 @@ export async function extractPart(
     features.push(extractFeature(detail, diagnostics));
   }
 
+  const created = new Set<string>();
+  for (const feature of features) {
+    if ('bodies' in feature) {
+      for (const name of feature.bodies) created.add(name);
+    }
+  }
+  const componentList = await listComponents().catch(() => ({ components: [] }));
+  const componentNames = new Set<string>();
+  for (const component of componentList.components ?? []) {
+    if (component.id === 0) continue;
+    for (const body of component.bodies ?? []) componentNames.add(body);
+  }
+  const measurements = new Map<string, BodyMeasurement>();
+  for (const body of inspection.bodies) measurements.set(body.name, body);
+  const missingNames = [...componentNames].filter((name) => !created.has(name));
+  if (missingNames.length > 0) {
+    const measured = await measureBodies(missingNames).catch(() => []);
+    for (const body of measured) measurements.set(body.name, body);
+  }
+  const inferredBodies: string[] = [];
+  let inferredId = -1;
+  for (const name of missingNames) {
+    const body = measurements.get(name);
+    if (!body) continue;
+    const feature = inferPrimitive(body, inferredId, diagnostics);
+    if (feature) {
+      inferredId -= 1;
+      features.unshift(feature);
+      inferredBodies.push(name);
+    }
+  }
+  for (const body of measurements.values()) {
+    if (!inspection.bodies.some((existing) => existing.name === body.name)) {
+      inspection.bodies.push(body);
+    }
+  }
   return {
     schemaVersion: '0.1',
     name: inspection.name ?? 'part',
@@ -563,6 +868,10 @@ export async function extractPart(
     features,
     bodies: inspection.bodies.map((body) => body.name),
     revision: inspection.revision,
+    bodyBounds: Object.fromEntries(
+      inspection.bodies.map((body) => [body.name, body.bbox]),
+    ),
+    inferredBodies,
     diagnostics,
   };
 }

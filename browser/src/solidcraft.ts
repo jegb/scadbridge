@@ -1,4 +1,6 @@
 import type {
+  BodyMeasurement,
+  ComponentList,
   DesignInspection,
   FeatureInspection,
   SketchInspection,
@@ -30,6 +32,19 @@ export async function waitForApi(timeoutMs = 30_000): Promise<SolidCraftApi> {
 
 export async function inspectDesign(measure = true): Promise<DesignInspection> {
   return getApi().inspect({ measure });
+}
+
+export async function listComponents(): Promise<ComponentList> {
+  return (await getApi().execute('component.list', {
+    bodies: true,
+  })) as ComponentList;
+}
+
+export async function measureBodies(names: string[]): Promise<BodyMeasurement[]> {
+  const result = (await getApi().execute('inspect.measure', {
+    bodies: names,
+  })) as { bodies?: BodyMeasurement[] };
+  return result.bodies ?? [];
 }
 
 export async function inspectSketch(id: number): Promise<SketchInspection> {
