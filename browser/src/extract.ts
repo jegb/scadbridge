@@ -6,7 +6,7 @@ import type {
   JsonValue,
   SketchInspection,
 } from './types';
-import { execute, inspectDesign, inspectFeature, inspectSketch, listComponents, measureBodies } from './solidcraft';
+import { inspectFeature, inspectFeatureByName, inspectSketch, listComponents, measureBodies } from './solidcraft';
 import type {
   BoxFeature,
   ChamferFeature,
@@ -744,35 +744,44 @@ function inferPrimitive(
 
 
 async function extractComponentFeatures(
+  rootFeatureNames: Set<string>,
   diagnostics: Diagnostic[],
 ): Promise<FeatureIR[]> {
-  const components = await listComponents().catch(() => ({ active: 0, components: [] as ComponentList['components'] }));
-  const active = components.active ?? 0;
+  const components = await listComponents().catch(() => ({
+    active: 0,
+    components: [] as ComponentList['components'],
+  }));
   const extracted: FeatureIR[] = [];
-  try {
-    for (const component of components.components ?? []) {
-      if (component.id === 0) continue;
-      if (!component.features || component.features.length === 0) continue;
-      await execute('component.activate', { component: component.id });
-      const inspection = await inspectDesign(false);
-      for (const item of inspection.timeline) {
-        if (item.rolled_back || item.suppressed) continue;
-        if (item.type === 'Sketch' || item.type === 'BodyTransferFeature') continue;
-        const detail = await inspectFeature(item.id);
-        if (detail.type === 'ExtrudeFeature') {
-          const sketchId = Number(detail.definition?.sketch);
-          const sketch = await inspectSketch(sketchId);
-          extracted.push(extractExtrude(detail, sketch, diagnostics));
-          continue;
-        }
-        extracted.push(extractFeature(detail, diagnostics));
+  const seen = new Set<string>();
+  for (const component of components.components ?? []) {
+    if (component.id === 0) continue;
+    for (const name of component.features ?? []) {
+      if (rootFeatureNames.has(name) || seen.has(name)) continue;
+      seen.add(name);
+      const detail = await inspectFeatureByName(name).catch(() => null);
+      if (!detail) {
+        diagnostics.push({
+          code: 'W133',
+          severity: 'warning',
+          message: `Component feature ${name} could not be inspected.`,
+        });
+        continue;
       }
+      if (detail.suppressed || detail.rolled_back) continue;
+      if (detail.type === 'Sketch' || detail.type === 'BodyTransferFeature') continue;
+      if (detail.type === 'CombineFeature') continue;
+      if (detail.type === 'ExtrudeFeature') {
+        const sketchId = Number(detail.definition?.sketch);
+        const sketch = await inspectSketch(sketchId);
+        extracted.push(extractExtrude(detail, sketch, diagnostics));
+        continue;
+      }
+      extracted.push(extractFeature(detail, diagnostics));
     }
-  } finally {
-    await execute('component.activate', { component: active }).catch(() => {});
   }
   return extracted;
 }
+
 
 export async function extractPart(
   inspection: DesignInspection,
@@ -873,7 +882,10 @@ export async function extractPart(
   }
   const missingReferenced = [...referenced].filter((name) => !rootCreated.has(name));
   if (missingReferenced.length > 0) {
-    const componentFeatures = await extractComponentFeatures(diagnostics);
+    const componentFeatures = await extractComponentFeatures(
+      new Set(features.map((feature) => feature.name)),
+      diagnostics,
+    );
     if (componentFeatures.length > 0) {
       features.unshift(...componentFeatures);
     }

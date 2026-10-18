@@ -47,6 +47,12 @@ export async function measureBodies(names: string[]): Promise<BodyMeasurement[]>
   return result.bodies ?? [];
 }
 
+export async function inspectFeatureByName(name: string): Promise<FeatureInspection> {
+  return (await getApi().execute('timeline.inspect', {
+    feature: name,
+  })) as FeatureInspection;
+}
+
 export async function inspectSketch(id: number): Promise<SketchInspection> {
   return (await getApi().execute('sketch.inspect', {
     sketch: id,
