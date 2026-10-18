@@ -136,6 +136,7 @@ M3 UAT evidence:
 - Multi-body validation renders each body separately, matching SolidCraft's per-body area and volume totals.
 - Cube plus separate sphere and sphere inside a component: 8523.56 mm³, validation passes.
 - Component sphere cut after the sphere was consumed by the combine: 7934.57 mm³, validation passes.
+- Cube plus component sphere radius 10 before any combine: 12188.49 mm³, validation passes.
 - The overlay hides itself while a SolidCraft dialog or file picker is open.
 
 ## M4 Production integration

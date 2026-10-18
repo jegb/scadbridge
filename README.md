@@ -177,6 +177,7 @@ Volumes are for the stated fixtures and will differ for other dimensions.
 | Cube + separate sphere | Cube plus radius 5 sphere as a second body | 8523.56 mm³ | PASS |
 | Sphere in a component | Sphere created inside Component1, moved, root activated | 8523.56 mm³ | PASS |
 | Component sphere cut | Sphere inside Component1, root Combine cut | 7934.57 mm³ | PASS |
+| Cube + component sphere r10 | Sphere inside Component1, no combine yet | 12188.49 mm³ | PASS |
 | Hole | 5 mm vertical through hole | 7607.37 mm³ | PASS |
 | Counterbore | 5 mm hole with 10 × 3 counterbore | 7430.82 mm³ | PASS |
 | Chamfer | 2 mm on any box edge | 7960 mm³ | PASS |
