@@ -6,7 +6,7 @@ import type {
   JsonValue,
   SketchInspection,
 } from './types';
-import { inspectFeature, inspectFeatureByName, inspectSketch, listComponents, measureBodies } from './solidcraft';
+import { execute, inspectFeature, inspectFeatureByName, inspectSketch, listComponents, measureBodies } from './solidcraft';
 import type {
   BoxFeature,
   ChamferFeature,
@@ -681,7 +681,15 @@ function inferPrimitive(
     Math.abs(values[0] - values[1]) <= tolerance &&
     Math.abs(values[1] - values[2]) <= tolerance;
 
-  if (faces === 1 && edges === 0 && vertices === 0 && uniform(size)) {
+  const sphereRadius = size[0] / 2;
+  const sphereVolume = (4 / 3) * Math.PI * sphereRadius ** 3;
+  const sphereByVolume =
+    uniform(size) &&
+    Math.abs((body.volume_mm3 ?? 0) - sphereVolume) / Math.max(sphereVolume, 1) < 0.01;
+  if (
+    (faces === 1 && edges === 0 && vertices === 0 && uniform(size)) ||
+    sphereByVolume
+  ) {
     return {
       ...base,
       kind: 'sphere',
@@ -912,6 +920,11 @@ export async function extractPart(
     if (component.id === 0) continue;
     for (const body of component.bodies ?? []) candidates.add(body);
   }
+  const properties = await execute<{ bodies?: Array<{ name: string }> }>(
+    'component.properties',
+    {},
+  ).catch(() => null);
+  for (const body of properties?.bodies ?? []) candidates.add(body.name);
   const measurements = new Map<string, BodyMeasurement>();
   for (const body of inspection.bodies) measurements.set(body.name, body);
   const escaped = [...rootCreated].map((name) =>
@@ -933,7 +946,14 @@ export async function extractPart(
   let inferredId = -1;
   for (const name of missingNames) {
     const body = measurements.get(name);
-    if (!body) continue;
+    if (!body) {
+      diagnostics.push({
+        code: 'W134',
+        severity: 'warning',
+        message: `Body ${name} is referenced but has no accessible measurement; it was not translated.`,
+      });
+      continue;
+    }
     const feature = inferPrimitive(body, inferredId, diagnostics);
     if (feature) {
       inferredId -= 1;
