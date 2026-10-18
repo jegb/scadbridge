@@ -1,10 +1,11 @@
 import type {
+  BodyMeasurement,
   DesignInspection,
   FeatureInspection,
   JsonValue,
   SketchInspection,
 } from './types';
-import { inspectFeature, inspectSketch } from './solidcraft';
+import { inspectFeature, inspectSketch, listComponents, measureBodies } from './solidcraft';
 import type {
   BoxFeature,
   ChamferFeature,
@@ -656,6 +657,91 @@ function bodyNamesOf(definition: Record<string, JsonValue>): string[] {
   return asStrings(definition.body_names);
 }
 
+function inferPrimitive(
+  body: BodyMeasurement,
+  id: number,
+  diagnostics: Diagnostic[],
+): FeatureIR | null {
+  const size = [
+    body.bbox.max[0] - body.bbox.min[0],
+    body.bbox.max[1] - body.bbox.min[1],
+    body.bbox.max[2] - body.bbox.min[2],
+  ];
+  const center = [
+    (body.bbox.max[0] + body.bbox.min[0]) / 2,
+    (body.bbox.max[1] + body.bbox.min[1]) / 2,
+    (body.bbox.max[2] + body.bbox.min[2]) / 2,
+  ];
+  const faces = body.faces ?? 0;
+  const edges = body.edges ?? 0;
+  const vertices = body.vertices ?? 0;
+  const base = { id, name: `Inferred ${body.name}`, type: 'InferredBody' };
+  const uniform = (values: number[], tolerance = 1e-6) =>
+    Math.abs(values[0] - values[1]) <= tolerance &&
+    Math.abs(values[1] - values[2]) <= tolerance;
+
+  if (faces === 1 && edges === 0 && vertices === 0 && uniform(size)) {
+    return {
+      ...base,
+      kind: 'sphere',
+      bodies: [body.name],
+      radius: String(size[0] / 2),
+      center: center.map(String) as Vec3Expr,
+      operation: 'new_body',
+      raw: { inferred: true },
+    };
+  }
+  if (faces === 6 && edges === 12 && vertices === 8) {
+    const bboxVolume = size[0] * size[1] * size[2];
+    if (bboxVolume > 0 && Math.abs((body.volume_mm3 ?? 0) - bboxVolume) / bboxVolume < 1e-6) {
+      return {
+        ...base,
+        kind: 'box',
+        bodies: [body.name],
+        length: String(size[0]),
+        width: String(size[1]),
+        height: String(size[2]),
+        corner: body.bbox.min.map(String) as Vec3Expr,
+        operation: 'new_body',
+        raw: { inferred: true },
+      };
+    }
+  }
+  if (faces === 3 && edges === 2 && vertices === 0) {
+    const equal = (a: number, b: number) => Math.abs(a - b) <= Math.max(a, b) * 1e-6;
+    let axis = -1;
+    if (equal(size[0], size[1])) axis = 2;
+    else if (equal(size[0], size[2])) axis = 1;
+    else if (equal(size[1], size[2])) axis = 0;
+    if (axis !== -1) {
+      const height = size[axis];
+      const radius = size[(axis + 1) % 3] / 2;
+      const basePoint = [...center];
+      basePoint[axis] = body.bbox.min[axis];
+      const axisVector: Vec3Expr = ['0', '0', '0'];
+      axisVector[axis] = '1';
+      return {
+        ...base,
+        kind: 'cylinder',
+        bodies: [body.name],
+        radius: String(radius),
+        height: String(height),
+        base: basePoint.map(String) as Vec3Expr,
+        axis: axisVector,
+        operation: 'new_body',
+        raw: { inferred: true },
+      };
+    }
+  }
+  diagnostics.push({
+    code: 'W132',
+    severity: 'warning',
+    message: `Body ${body.name} is inside a component but is not a recognized primitive; it was not translated.`,
+  });
+  return null;
+}
+
+
 export async function extractPart(
   inspection: DesignInspection,
   options: { includeSuppressed?: boolean } = {},
@@ -700,6 +786,7 @@ export async function extractPart(
       });
       continue;
     }
+    if (item.type === 'BodyTransferFeature') continue;
     if (item.suppressed && !options.includeSuppressed) {
       const bodies = bodyNamesOf(detail.definition ?? {});
       const needed = bodies.some((name) => referenced.has(name));
@@ -737,6 +824,42 @@ export async function extractPart(
     features.push(extractFeature(detail, diagnostics));
   }
 
+  const created = new Set<string>();
+  for (const feature of features) {
+    if ('bodies' in feature) {
+      for (const name of feature.bodies) created.add(name);
+    }
+  }
+  const componentList = await listComponents().catch(() => ({ components: [] }));
+  const componentNames = new Set<string>();
+  for (const component of componentList.components ?? []) {
+    if (component.id === 0) continue;
+    for (const body of component.bodies ?? []) componentNames.add(body);
+  }
+  const measurements = new Map<string, BodyMeasurement>();
+  for (const body of inspection.bodies) measurements.set(body.name, body);
+  const missingNames = [...componentNames].filter((name) => !created.has(name));
+  if (missingNames.length > 0) {
+    const measured = await measureBodies(missingNames).catch(() => []);
+    for (const body of measured) measurements.set(body.name, body);
+  }
+  const inferredBodies: string[] = [];
+  let inferredId = -1;
+  for (const name of missingNames) {
+    const body = measurements.get(name);
+    if (!body) continue;
+    const feature = inferPrimitive(body, inferredId, diagnostics);
+    if (feature) {
+      inferredId -= 1;
+      features.unshift(feature);
+      inferredBodies.push(name);
+    }
+  }
+  for (const body of measurements.values()) {
+    if (!inspection.bodies.some((existing) => existing.name === body.name)) {
+      inspection.bodies.push(body);
+    }
+  }
   return {
     schemaVersion: '0.1',
     name: inspection.name ?? 'part',
@@ -748,6 +871,7 @@ export async function extractPart(
     bodyBounds: Object.fromEntries(
       inspection.bodies.map((body) => [body.name, body.bbox]),
     ),
+    inferredBodies,
     diagnostics,
   };
 }

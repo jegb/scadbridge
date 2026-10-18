@@ -357,7 +357,7 @@ export async function validateScad(
       code: 'E320',
       severity: 'error',
       message:
-        'Parametric equivalence failed. Generated geometry differs beyond the configured tolerance.',
+        `Parametric equivalence failed. Volume ref ${reference.volume.toFixed(2)} vs gen ${generated.volume.toFixed(2)} (${(comparison.volumeRelative * 100).toFixed(3)}%); area ${(comparison.areaRelative * 100).toFixed(3)}%; bbox ${comparison.bboxAbsolute.toFixed(4)} mm; centroid ${comparison.centroidAbsolute.toFixed(4)} mm.`,
     });
   }
   return {

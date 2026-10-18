@@ -1522,6 +1522,10 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
 
     if (feature.kind === 'move') {
       for (const name of feature.bodies) {
+        if (!feature.copy && part.inferredBodies?.includes(name)) {
+          // Inferred component bodies are already at their measured world position.
+          continue;
+        }
         const current = bodies.get(name);
         if (!current) {
           diagnostics.push(missing(feature, name));

@@ -36,6 +36,7 @@ export interface BodyMeasurement {
   faces?: number;
   edges?: number;
   vertices?: number;
+  face_types?: Record<string, number>;
 }
 
 export interface DesignInspection {
@@ -86,6 +87,23 @@ export interface SketchInspection {
     area_mm2?: number;
   }>;
   status?: string;
+}
+
+export interface ComponentBody {
+  name: string;
+  component?: number;
+  path?: number[];
+}
+
+export interface ComponentList {
+  active?: number;
+  components?: Array<{
+    id: number;
+    name: string;
+    parent: number | null;
+    bodies?: string[];
+    children?: Array<{ component: number; id: number; name: string }>;
+  }>;
 }
 
 export interface CommandInfo {

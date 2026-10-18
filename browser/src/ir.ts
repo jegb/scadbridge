@@ -276,6 +276,7 @@ export interface PartIR {
   bodies: string[];
   revision?: number;
   bodyBounds?: Record<string, { min: [number, number, number]; max: [number, number, number] }>;
+  inferredBodies?: string[];
   diagnostics: Diagnostic[];
 }
 

@@ -261,6 +261,15 @@ async function main() {
       output.ops.push(await runOp('bounding', [
         { command: 'solid.bounding_solid', params: { bodies: ['scad_1_cube'], margin: '2', body_name: 'Bounds1' } },
       ]));
+      output.ops.push(await runOp('cube_sphere_separate', [
+        { command: 'solid.sphere', params: { radius: '5', center: [0, 0, 0], body_name: 'Body1' } },
+      ]));
+      output.ops.push(await runOp('component_sphere', [
+        { command: 'component.create', params: { name: 'Component1' } },
+        { command: 'solid.sphere', params: { radius: '5', center: [0, 0, 0], body_name: 'Body1' } },
+        { command: 'solid.move', params: { bodies: ['Body1'], translate: ['5', '0', '0'] } },
+        { command: 'component.activate', params: { component: 0 } },
+      ]));
       output.ops.push(await runOp('fillet_hole', [
         { command: 'solid.hole', params: { position: [10, 10, 20], diameter: '5' } },
         { command: 'solid.fillet', params: { edges: [[0, 10, 0]], radius: '2', body: 'scad_1_cube' } },
