@@ -117,7 +117,7 @@ M1 evidence from the smoke test:
 | SB-326 | Sketch arcs, splines and holes | Open | Tessellate or BOSL2 path handling |
 | SB-327 | Multi-profile extrusions | Open | Multiple outer loops and holes |
 | SB-328 | Pattern/mirror/copy body creation | Done | Move copies, mirror copies and pattern copies become separate named bodies |
-| SB-329 | Primitive component body inference | Done | Sphere, box and cylinder bodies in components are inferred from topology and measured placement; move features are not applied twice |
+| SB-329 | Primitive component body inference | Done | Component feature timelines are replayed when a consumed body is referenced by a combine; primitive inference covers remaining component bodies |
 
 M3 evidence from the browser smoke test:
 
@@ -135,6 +135,7 @@ M3 UAT evidence:
 - Coil 986.47 mm³ reference, 997.42 mm³ generated (1.1% helix-length difference), accepted at 2% volume tolerance.
 - Multi-body validation renders each body separately, matching SolidCraft's per-body area and volume totals.
 - Cube plus separate sphere and sphere inside a component: 8523.56 mm³, validation passes.
+- Component sphere cut after the sphere was consumed by the combine: 7934.57 mm³, validation passes.
 - The overlay hides itself while a SolidCraft dialog or file picker is open.
 
 ## M4 Production integration

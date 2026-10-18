@@ -270,6 +270,12 @@ async function main() {
         { command: 'solid.move', params: { bodies: ['Body1'], translate: ['5', '0', '0'] } },
         { command: 'component.activate', params: { component: 0 } },
       ]));
+      output.ops.push(await runOp('component_cut', [
+        { command: 'component.create', params: { name: 'Component1' } },
+        { command: 'solid.sphere', params: { radius: '5', center: [0, 0, 0], body_name: 'Body1' } },
+        { command: 'component.activate', params: { component: 0 } },
+        { command: 'solid.combine', params: { target: 'scad_1_cube', tools: ['Body1'], operation: 'cut' } },
+      ]));
       output.ops.push(await runOp('fillet_hole', [
         { command: 'solid.hole', params: { position: [10, 10, 20], diameter: '5' } },
         { command: 'solid.fillet', params: { edges: [[0, 10, 0]], radius: '2', body: 'scad_1_cube' } },
