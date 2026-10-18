@@ -1,0 +1,21 @@
+{
+  "name": "scadbridge-browser",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser integration for SCADBridge inside the SolidCraft web app",
+  "scripts": {
+    "build": "vite build && ../scripts/install-web-overlay.sh install",
+    "dev": "vite build --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
+  }
+}

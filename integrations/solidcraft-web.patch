@@ -1,0 +1,202 @@
+diff --git a/apps/solidcraft-web/index.html b/apps/solidcraft-web/index.html
+index c1068d5bd3ae197abe691827d1f02cb09f34f3b8..64e2a27e1b7c10607162fdfe09bf27fdfe174c19 100644
+--- a/apps/solidcraft-web/index.html
++++ b/apps/solidcraft-web/index.html
+@@ -33,19 +33,38 @@
+   <link data-trunk rel="copy-file" href="../../assets/icons/app/linux/exports/hicolor/32x32/apps/ai.storyteller.solidcraft.png" data-target-path="icons/32x32" />
+   <link data-trunk rel="copy-file" href="../../assets/icons/app/linux/exports/hicolor/256x256/apps/ai.storyteller.solidcraft.png" data-target-path="icons/256x256" />
+   <link data-trunk rel="copy-file" href="../../assets/icons/app/linux/exports/hicolor/512x512/apps/ai.storyteller.solidcraft.png" data-target-path="icons/512x512" />
++  <link data-trunk rel="copy-dir" href="../../../scadbridge/browser/dist" data-target-path="scadbridge" />
+ </head>
+ <body>
+   <canvas id="solidcraft_canvas"></canvas>
+   <div id="solidcraft_loading" role="status"><img src="loading-logo.svg" alt=""><span class="sr-only">Loading SolidCraft&hellip;</span></div>
+   <script>
+     // Offline use and updates (sw.js; written into release builds by `cargo xtask web-offline`).
++    // Local development never uses a release worker: it would keep serving an older overlay.
++    const localDev = location.hostname === "127.0.0.1" || location.hostname === "localhost";
+     if ("serviceWorker" in navigator) {
+-      addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
++      if (localDev) {
++        navigator.serviceWorker.getRegistrations().then(async (registrations) => {
++          if (!registrations.length) return;
++          await Promise.all(registrations.map((registration) => registration.unregister()));
++          if (self.caches) {
++            const keys = await caches.keys();
++            await Promise.all(keys.map((key) => caches.delete(key)));
++          }
++          if (!sessionStorage.getItem("scadbridge-sw-reset")) {
++            sessionStorage.setItem("scadbridge-sw-reset", "1");
++            location.reload();
++          }
++        });
++      } else {
++        addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
++      }
+     }
+     // Install as an app: the browser's offer can come before the app runs, so it is kept here for
+     // the app's File ▸ Install app… item (src/install.rs). Installed, the browser makes no more offers.
+     addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); window.solidcraftInstall = e; });
+     addEventListener("appinstalled", () => { window.solidcraftInstall = null; });
+   </script>
++  <script type="module" src="./scadbridge/scadbridge-8b14ef7b2b79.js"></script>
+ </body>
+ </html>
+diff --git a/apps/solidcraft-web/src/files.rs b/apps/solidcraft-web/src/files.rs
+index 126bede0ccdcc602dff09d803952d57e94e0e7d8..16dd0ce1b255502d1f74b144ccfcd1ebd8e2854c 100644
+--- a/apps/solidcraft-web/src/files.rs
++++ b/apps/solidcraft-web/src/files.rs
+@@ -424,6 +424,7 @@ pub fn recovery_path() -> String {
+ /// `<input type=file>`. Read files arrive in `files.incoming`.
+ pub fn pick_from_disk(files: &Rc<Files>, intent: Intent) {
+     let Some(window) = web_sys::window() else { return };
++    crate::scad_bridge::clear_handle();
+     let picker = Reflect::get(&window, &"showOpenFilePicker".into()).ok().and_then(|f| f.dyn_into::<Function>().ok());
+     match picker {
+         Some(f) => {
+@@ -437,8 +438,12 @@ pub fn pick_from_disk(files: &Rc<Files>, intent: Intent) {
+                     let handles: Array = JsFuture::from(p).await.map_err(err)?.dyn_into().map_err(|_| "no files".to_string())?;
+                     for h in handles.iter() {
+                         let h: FileSystemFileHandle = h.dyn_into().map_err(|_| "not a file".to_string())?;
++                        let name = h.name();
++                        if intent == Intent::Open && name.to_ascii_lowercase().ends_with(".scad") {
++                            crate::scad_bridge::remember_handle(&h);
++                        }
+                         let bytes = read_handle(&h).await?;
+-                        files.arrive(h.name(), bytes, intent);
++                        files.arrive(name, bytes, intent);
+                     }
+                     Ok::<(), String>(())
+                 };
+@@ -458,7 +463,7 @@ fn input_picker(files: &Rc<Files>, intent: Intent) {
+     let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
+     let Ok(input) = doc.create_element("input").map(|e| e.unchecked_into::<web_sys::HtmlInputElement>()) else { return };
+     input.set_type("file");
+-    input.set_accept(".solidcraft,.solvecraft,.json,.step,.stp,.3mf,.stl,.obj,.glb,.gltf");
++    input.set_accept(".solidcraft,.solvecraft,.json,.scad,.step,.stp,.3mf,.stl,.obj,.glb,.gltf");
+     // Attached (hidden) while it is open: some browsers ignore a click on a detached input.
+     let _ = input.set_attribute("style", "display:none");
+     if let Some(body) = doc.body() {
+diff --git a/apps/solidcraft-web/src/main.rs b/apps/solidcraft-web/src/main.rs
+index b134903b75a8090417b0ae2e017c93f80589f2ce..a6f4a4d77dc37217ca6871d2963ebf76466f57ab 100644
+--- a/apps/solidcraft-web/src/main.rs
++++ b/apps/solidcraft-web/src/main.rs
+@@ -12,6 +12,8 @@ mod api;
+ mod files;
+ #[cfg(target_arch = "wasm32")]
+ mod install;
++#[cfg(target_arch = "wasm32")]
++mod scad_bridge;
+ #[cfg(any(target_arch = "wasm32", test))]
+ mod space_mouse;
+ 
+@@ -131,6 +133,20 @@ mod web {
+                 !companion
+             });
+             for (name, bytes, intent) in incoming {
++                if name.to_ascii_lowercase().ends_with(".scad") {
++                    match String::from_utf8(bytes) {
++                        Ok(source) => {
++                            if crate::scad_bridge::open(&name, &source) {
++                                self.app.set_status(format!("SCADBridge: opening {name}"), false);
++                            } else {
++                                self.app.set_status("SCADBridge overlay is not ready; reload the page", true);
++                            }
++                        }
++                        Err(_) => self.app.set_status(format!("{name}: not UTF-8 text"), true),
++                    }
++                    self.files.panel.set(false);
++                    continue;
++                }
+                 let design = solidcraft_engine::io::is_design_path(&name);
+                 let path = if design && intent == Intent::Open {
+                     // A design from the computer is kept in the browser (a copy), so Save works.
+@@ -521,6 +537,7 @@ mod web {
+                                 Box::pin(std::future::ready(Some(format!("{}{name}", if design { files::OPFS } else { files::DOWNLOADS }))))
+                             })),
+                             install_app: Some(crate::install::service(&cc.egui_ctx)),
++                            export_scad: Some(Box::new(crate::scad_bridge::export)),
+                             ..Default::default()
+                         };
+                         // Thumbnails of saves and start-page cards.
+diff --git a/apps/solidcraft-web/src/scad_bridge.rs b/apps/solidcraft-web/src/scad_bridge.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..340536d7e4cd95c000ed485034443cc1ab058add
+--- /dev/null
++++ b/apps/solidcraft-web/src/scad_bridge.rs
+@@ -0,0 +1,44 @@
++//! Hands SCAD files and actions to the SCADBridge overlay loaded in the page.
++//!
++//! The bridge owns parsing, compilation and the SolidCraft command plan, so this module
++//! only passes text and names to JavaScript and remembers the writable file handle for
++//! write-back.
++
++use wasm_bindgen::{JsCast as _, JsValue};
++use web_sys::FileSystemFileHandle;
++
++fn global(name: &str) -> Option<js_sys::Function> {
++    let window = web_sys::window()?;
++    js_sys::Reflect::get(&window, &name.into())
++        .ok()
++        .and_then(|value| value.dyn_into::<js_sys::Function>().ok())
++}
++
++/// Ask the SCADBridge overlay to open this source. Returns false when the overlay is not
++/// loaded, so the caller can report it instead of silently doing nothing.
++pub fn open(name: &str, source: &str) -> bool {
++    let Some(function) = global("scadbridgeOpenFile") else { return false };
++    function
++        .call2(&JsValue::UNDEFINED, &JsValue::from_str(source), &JsValue::from_str(name))
++        .is_ok()
++}
++
++/// Export the current design as SCAD through the overlay.
++pub fn export() -> bool {
++    let Some(function) = global("scadbridgeExportScad") else { return false };
++    function.call0(&JsValue::UNDEFINED).is_ok()
++}
++
++/// Keep the picked file's handle so the overlay can write back into it.
++pub fn remember_handle(handle: &FileSystemFileHandle) {
++    if let Some(window) = web_sys::window() {
++        let _ = js_sys::Reflect::set(&window, &"scadbridgeFileHandle".into(), handle.as_ref());
++    }
++}
++
++/// Drop a handle from an earlier pick.
++pub fn clear_handle() {
++    if let Some(window) = web_sys::window() {
++        let _ = js_sys::Reflect::set(&window, &"scadbridgeFileHandle".into(), &JsValue::NULL);
++    }
++}
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index 2a40f6e07621eceb5e178965b23671d98ed55686..a75efed3d655861cf81389bba164a909214ca207 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -270,6 +270,8 @@ pub struct Services {
+     pub http_download: Option<update::install::HttpDownload>,
+     /// The browser's offer to install the web app (`install`); None: no Install button (desktop).
+     pub install_app: Option<install::InstallApp>,
++    /// Write the current design as OpenSCAD through the SCADBridge overlay; None: no item.
++    pub export_scad: Option<Box<dyn Fn() -> bool>>,
+     /// HTTP for the agent chat's API agents (OpenAI-compatible endpoints); None: no API agents.
+     pub agent_http: Option<agent_chat::backend::HttpFn>,
+     /// The system keychain, for API agents' keys; None: keys can't be stored.
+diff --git a/crates/ui-egui/src/toolbar.rs b/crates/ui-egui/src/toolbar.rs
+index c1bd3ecbd89e86495374bfc5eef4c7f2dca5da4e..68ec6c8d0ff99e22d9b22a4cb5e71b9607f0c9c5 100644
+--- a/crates/ui-egui/src/toolbar.rs
++++ b/crates/ui-egui/src/toolbar.rs
+@@ -444,6 +444,13 @@ fn file_menu(app: &mut SolveApp, ctx: &egui::Context) {
+                     export(app, "step");
+                     close = true;
+                 }
++                if item_if(ui, "Export SCAD…", "", shown && app.services.export_scad.is_some()) {
++                    let exported = app.services.export_scad.as_ref().map(|export| export());
++                    if exported == Some(false) {
++                        app.set_status("SCADBridge overlay is not ready; reload the page", true);
++                    }
++                    close = true;
++                }
+                 if item_if(ui, app.tr_label("Export Current View as DXF…"), "", shown) {
+                     app.start("file.export_view_dxf");
+                     close = true;

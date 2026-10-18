@@ -1,0 +1,53 @@
+{
+  "name": "test_cube",
+  "description": "20 mm box with a 6 mm through hole. Created through window.solidcraft and compiled by SCADBridge M1.",
+  "parameters": {
+    "size": { "expression": "20", "unit": "mm" },
+    "hole": { "expression": "6", "unit": "mm" }
+  },
+  "commands": [
+    {
+      "command": "solid.box",
+      "params": {
+        "length": "size",
+        "width": "size",
+        "height": "size",
+        "center": [0, 0, 0],
+        "body_name": "cube"
+      }
+    },
+    {
+      "command": "solid.cylinder",
+      "params": {
+        "diameter": "hole",
+        "height": "size + 2",
+        "base": [0, 0, "-(size/2) - 1"],
+        "body_name": "hole_cut"
+      }
+    },
+    {
+      "command": "solid.combine",
+      "params": { "target": "cube", "tools": ["hole_cut"], "operation": "cut" }
+    }
+  ],
+  "reference": {
+    "volume_mm3": 7434.607251775665,
+    "bbox_min": [-10, -10, -10],
+    "bbox_max": [10, 10, 10],
+    "tolerance": {
+      "volumeRelative": 0.005,
+      "areaRelative": 0.02,
+      "bboxAbsolute": 0.05,
+      "centroidAbsolute": 0.1
+    }
+  },
+  "chamfer_experiment": {
+    "edge_mid_mm": [0, 10, -10],
+    "size_mm": 20,
+    "chamfer_mm": 2,
+    "volume_before_mm3": 7960,
+    "size_after_mm": 30,
+    "chamfer_after_mm": 3,
+    "volume_after_mm3": 26865
+  }
+}
