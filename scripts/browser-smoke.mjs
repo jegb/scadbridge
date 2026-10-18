@@ -270,6 +270,11 @@ async function main() {
         { command: 'solid.move', params: { bodies: ['Body1'], translate: ['5', '0', '0'] } },
         { command: 'component.activate', params: { component: 0 } },
       ]));
+      output.ops.push(await runOp('component_sphere_r10', [
+        { command: 'component.create', params: { name: 'Component1' } },
+        { command: 'solid.sphere', params: { radius: '10', center: [0, 0, 0], body_name: 'Body1' } },
+        { command: 'component.activate', params: { component: 0 } },
+      ]));
       output.ops.push(await runOp('component_cut', [
         { command: 'component.create', params: { name: 'Component1' } },
         { command: 'solid.sphere', params: { radius: '5', center: [0, 0, 0], body_name: 'Body1' } },

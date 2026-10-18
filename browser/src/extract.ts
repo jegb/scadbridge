@@ -895,13 +895,23 @@ export async function extractPart(
   }
   const componentList = await listComponents().catch(() => ({ components: [] }));
   const candidates = new Set<string>(referenced);
+  for (const body of inspection.bodies) candidates.add(body.name);
   for (const component of componentList.components ?? []) {
     if (component.id === 0) continue;
     for (const body of component.bodies ?? []) candidates.add(body);
   }
   const measurements = new Map<string, BodyMeasurement>();
   for (const body of inspection.bodies) measurements.set(body.name, body);
-  const missingNames = [...candidates].filter((name) => !created.has(name));
+  const escaped = [...rootCreated].map((name) =>
+    name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  );
+  const copyPattern =
+    escaped.length > 0
+      ? new RegExp(`^(?:${escaped.join('|')}) \\(\\d+\\)$`)
+      : null;
+  const missingNames = [...candidates].filter(
+    (name) => !created.has(name) && (!copyPattern || !copyPattern.test(name)),
+  );
   const needMeasure = missingNames.filter((name) => !measurements.has(name));
   if (needMeasure.length > 0) {
     const measured = await measureBodies(needMeasure).catch(() => []);
