@@ -117,6 +117,7 @@ M1 evidence from the smoke test:
 | SB-326 | Sketch arcs, splines and holes | Open | Tessellate or BOSL2 path handling |
 | SB-327 | Multi-profile extrusions | Open | Multiple outer loops and holes |
 | SB-328 | Pattern/mirror/copy body creation | Done | Move copies, mirror copies and pattern copies become separate named bodies |
+| SB-329 | Primitive component body inference | Done | Sphere, box and cylinder bodies in components are inferred from topology and measured placement; move features are not applied twice |
 
 M3 evidence from the browser smoke test:
 
@@ -133,6 +134,8 @@ M3 UAT evidence:
 - Torus 789.45, mirror 16000, rectangular pattern 16000, circular pattern 32000, bounding 21824: validation passes.
 - Coil 986.47 mm³ reference, 997.42 mm³ generated (1.1% helix-length difference), accepted at 2% volume tolerance.
 - Multi-body validation renders each body separately, matching SolidCraft's per-body area and volume totals.
+- Cube plus separate sphere and sphere inside a component: 8523.56 mm³, validation passes.
+- The overlay hides itself while a SolidCraft dialog or file picker is open.
 
 ## M4 Production integration
 
