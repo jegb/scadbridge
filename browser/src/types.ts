@@ -102,6 +102,8 @@ export interface ComponentList {
     name: string;
     parent: number | null;
     bodies?: string[];
+    features?: string[];
+    occurrences?: Array<{ transform?: number[][] }>;
     children?: Array<{ component: number; id: number; name: string }>;
   }>;
 }

@@ -1,11 +1,12 @@
 import type {
   BodyMeasurement,
+  ComponentList,
   DesignInspection,
   FeatureInspection,
   JsonValue,
   SketchInspection,
 } from './types';
-import { inspectFeature, inspectSketch, listComponents, measureBodies } from './solidcraft';
+import { execute, inspectDesign, inspectFeature, inspectSketch, listComponents, measureBodies } from './solidcraft';
 import type {
   BoxFeature,
   ChamferFeature,
@@ -742,6 +743,37 @@ function inferPrimitive(
 }
 
 
+async function extractComponentFeatures(
+  diagnostics: Diagnostic[],
+): Promise<FeatureIR[]> {
+  const components = await listComponents().catch(() => ({ active: 0, components: [] as ComponentList['components'] }));
+  const active = components.active ?? 0;
+  const extracted: FeatureIR[] = [];
+  try {
+    for (const component of components.components ?? []) {
+      if (component.id === 0) continue;
+      if (!component.features || component.features.length === 0) continue;
+      await execute('component.activate', { component: component.id });
+      const inspection = await inspectDesign(false);
+      for (const item of inspection.timeline) {
+        if (item.rolled_back || item.suppressed) continue;
+        if (item.type === 'Sketch' || item.type === 'BodyTransferFeature') continue;
+        const detail = await inspectFeature(item.id);
+        if (detail.type === 'ExtrudeFeature') {
+          const sketchId = Number(detail.definition?.sketch);
+          const sketch = await inspectSketch(sketchId);
+          extracted.push(extractExtrude(detail, sketch, diagnostics));
+          continue;
+        }
+        extracted.push(extractFeature(detail, diagnostics));
+      }
+    }
+  } finally {
+    await execute('component.activate', { component: active }).catch(() => {});
+  }
+  return extracted;
+}
+
 export async function extractPart(
   inspection: DesignInspection,
   options: { includeSuppressed?: boolean } = {},
@@ -824,23 +856,55 @@ export async function extractPart(
     features.push(extractFeature(detail, diagnostics));
   }
 
+  const rootCreators = new Set([
+    'box',
+    'cylinder',
+    'sphere',
+    'extrude',
+    'torus',
+    'coil',
+    'bounding',
+  ]);
+  const rootCreated = new Set<string>();
+  for (const feature of features) {
+    if (rootCreators.has(feature.kind) && 'bodies' in feature) {
+      for (const name of feature.bodies) rootCreated.add(name);
+    }
+  }
+  const missingReferenced = [...referenced].filter((name) => !rootCreated.has(name));
+  if (missingReferenced.length > 0) {
+    const componentFeatures = await extractComponentFeatures(diagnostics);
+    if (componentFeatures.length > 0) {
+      features.unshift(...componentFeatures);
+    }
+  }
+  const creatorKinds = new Set([
+    'box',
+    'cylinder',
+    'sphere',
+    'extrude',
+    'torus',
+    'coil',
+    'bounding',
+  ]);
   const created = new Set<string>();
   for (const feature of features) {
-    if ('bodies' in feature) {
+    if (creatorKinds.has(feature.kind) && 'bodies' in feature) {
       for (const name of feature.bodies) created.add(name);
     }
   }
   const componentList = await listComponents().catch(() => ({ components: [] }));
-  const componentNames = new Set<string>();
+  const candidates = new Set<string>(referenced);
   for (const component of componentList.components ?? []) {
     if (component.id === 0) continue;
-    for (const body of component.bodies ?? []) componentNames.add(body);
+    for (const body of component.bodies ?? []) candidates.add(body);
   }
   const measurements = new Map<string, BodyMeasurement>();
   for (const body of inspection.bodies) measurements.set(body.name, body);
-  const missingNames = [...componentNames].filter((name) => !created.has(name));
-  if (missingNames.length > 0) {
-    const measured = await measureBodies(missingNames).catch(() => []);
+  const missingNames = [...candidates].filter((name) => !created.has(name));
+  const needMeasure = missingNames.filter((name) => !measurements.has(name));
+  if (needMeasure.length > 0) {
+    const measured = await measureBodies(needMeasure).catch(() => []);
     for (const body of measured) measurements.set(body.name, body);
   }
   const inferredBodies: string[] = [];
