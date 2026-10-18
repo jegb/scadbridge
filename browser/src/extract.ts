@@ -673,27 +673,46 @@ export async function extractPart(
   const referenced = new Set<string>();
   for (const detail of details.values()) {
     const definition = detail.definition ?? {};
-    if (detail.type === 'CombineFeature') {
-      const target = asString(definition.target);
-      if (target) referenced.add(target);
-      for (const tool of asStrings(definition.tools)) referenced.add(tool);
-    } else {
-      const operation = asString(definition.operation);
-      if (operation === 'join' || operation === 'cut' || operation === 'intersect') {
-        for (const target of asStrings(definition.participants)) referenced.add(target);
-        for (const target of asStrings(definition.targets)) referenced.add(target);
-      }
-    }
+    // Every feature that names an existing body makes that body a dependency.
+    const references = [
+      ...asStrings(definition.bodies),
+      ...asStrings(definition.tools),
+      ...asStrings(definition.participants),
+      ...asStrings(definition.targets),
+    ];
+    const body = asString(definition.body);
+    if (body) references.push(body);
+    const target = asString(definition.target);
+    if (target) references.push(target);
+    for (const name of references) referenced.add(name);
   }
 
   for (const item of inspection.timeline) {
-    if (item.rolled_back) continue;
     const detail = details.get(item.id);
     if (!detail) continue;
+    if (item.rolled_back) {
+      diagnostics.push({
+        code: 'W131',
+        severity: 'warning',
+        message: `Skipped rolled-back feature ${item.name} (${item.type}); bodies: ${bodyNamesOf(detail.definition ?? {}).join(', ') || 'none'}.`,
+        featureId: item.id,
+        featureName: item.name,
+      });
+      continue;
+    }
     if (item.suppressed && !options.includeSuppressed) {
       const bodies = bodyNamesOf(detail.definition ?? {});
       const needed = bodies.some((name) => referenced.has(name));
-      if (!needed) continue;
+      if (!needed) {
+        diagnostics.push({
+          code: 'W131',
+          severity: 'warning',
+          message: `Skipped suppressed feature ${item.name} (${item.type}); bodies: ${bodies.join(', ') || 'none'}.`,
+          featureId: item.id,
+          featureName: item.name,
+        });
+        continue;
+      }
     }
     if (item.error) {
       diagnostics.push({
