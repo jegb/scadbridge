@@ -20,6 +20,7 @@ export interface ScadResult {
   code: string;
   diagnostics: Diagnostic[];
   bodies: string[];
+  bodyModules: Record<string, string>;
 }
 
 const UNIT_SUFFIX = /(\d+(?:\.\d+)?)\s*(mm|cm|in|ft|deg|rad)\b/g;
@@ -881,6 +882,66 @@ function shellInnerBox(
   return `translate([${lo.join(', ')}]) cube([${dim.join(', ')}]);`;
 }
 
+function extrudeBoxInfo(
+  feature: ExtrudeFeature,
+  params: Map<string, number>,
+): BoxInfo | null {
+  if (feature.profile.kind !== 'polygon' || feature.profile.points.length !== 4) return null;
+  const xDir = feature.plane.xDir.map((value) => Number(expr(value)));
+  const yDir = feature.plane.yDir.map((value) => Number(expr(value)));
+  const origin = feature.plane.origin.map((value) => Number(expr(value)));
+  if (![...xDir, ...yDir, ...origin].every(Number.isFinite)) return null;
+  const isAxis = (vector: number[]) =>
+    vector.filter((value) => Math.abs(value) > 1e-9).length === 1 &&
+    Math.abs(Math.max(...vector.map((value) => Math.abs(value))) - 1) < 1e-9;
+  if (!isAxis(xDir) || !isAxis(yDir)) return null;
+  const normal = [
+    xDir[1] * yDir[2] - xDir[2] * yDir[1],
+    xDir[2] * yDir[0] - xDir[0] * yDir[2],
+    xDir[0] * yDir[1] - xDir[1] * yDir[0],
+  ];
+  const world = feature.profile.points.map(([u, v]) =>
+    [0, 1, 2].map((axis) => origin[axis] + xDir[axis] * u + yDir[axis] * v),
+  );
+  const min = [0, 1, 2].map((axis) => Math.min(...world.map((point) => point[axis])));
+  const max = [0, 1, 2].map((axis) => Math.max(...world.map((point) => point[axis])));
+  for (const point of world) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      const tolerance = Math.max(Math.abs(max[axis] - min[axis]) * 1e-9, 1e-9);
+      if (
+        Math.abs(point[axis] - min[axis]) > tolerance &&
+        Math.abs(point[axis] - max[axis]) > tolerance
+      ) {
+        return null;
+      }
+    }
+  }
+  const distance = evalArithmetic(feature.distance, params);
+  if (distance === null) return null;
+  const symmetric = feature.direction === 'symmetric';
+  const sign = feature.direction === 'negative' ? -1 : 1;
+  const low = [...min];
+  const high = [...max];
+  for (let axis = 0; axis < 3; axis += 1) {
+    if (symmetric) {
+      low[axis] -= Math.abs(normal[axis]) * distance / 2;
+      high[axis] += Math.abs(normal[axis]) * distance / 2;
+    } else if (normal[axis] * sign > 0) {
+      high[axis] += Math.abs(normal[axis]) * distance;
+    } else if (normal[axis] !== 0) {
+      low[axis] -= Math.abs(normal[axis]) * distance;
+    }
+  }
+  return {
+    x0: String(low[0]),
+    x1: String(high[0]),
+    y0: String(low[1]),
+    y1: String(high[1]),
+    z0: String(low[2]),
+    z1: String(high[2]),
+  };
+}
+
 function extrudeNode(
   feature: ExtrudeFeature,
   fn: number,
@@ -920,6 +981,8 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
   const diagnostics: Diagnostic[] = [...part.diagnostics];
   const bodies = new Map<string, string>();
   const infos = new Map<string, BoxInfo>();
+  const boxLike = new Set<string>();
+  let usesBosl2 = false;
   const order: string[] = [];
   const comments = new Map<string, string[]>();
   const bodyCreators = part.features
@@ -1014,7 +1077,6 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
         if (cutters.length === 0) continue;
         const children = [body, ...cutters].map((node) => indent(node, 1)).join('\n');
         setBody(name, `difference() {\n${children}\n}`, comment);
-        infos.delete(name);
         applied = true;
       }
       if (!applied) diagnostics.push(chamferDiagnostic(feature));
@@ -1033,6 +1095,7 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
           setBody(name, body, comment);
           if (feature.kind === 'box' && feature.bodies.length === 1) {
             infos.set(name, boxInfo(feature));
+            boxLike.add(name);
           }
         }
         continue;
@@ -1116,8 +1179,16 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
           target = Array.from(bodies.keys())[0];
         }
       }
-      const info = target ? infos.get(target) : undefined;
+      let info = target ? infos.get(target) : undefined;
       const body = target ? bodies.get(target) : undefined;
+      if (!info && target && boxLike.has(target) && part.bodyBounds?.[target]) {
+        const bounds = part.bodyBounds[target];
+        info = {
+          x0: String(bounds.min[0]), x1: String(bounds.max[0]),
+          y0: String(bounds.min[1]), y1: String(bounds.max[1]),
+          z0: String(bounds.min[2]), z1: String(bounds.max[2]),
+        };
+      }
       if (!target || !info || !body) {
         diagnostics.push({
           code: 'E125',
@@ -1132,7 +1203,6 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
       if (cutters.length === 0) continue;
       const children = [body, ...cutters].map((node) => indent(node, 1)).join('\n');
       setBody(target, `difference() {\n${children}\n}`, comment);
-      infos.delete(target);
       continue;
     }
 
@@ -1155,7 +1225,6 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
       if (!inner) continue;
       const children = [body, inner].map((node) => indent(node, 1)).join('\n');
       setBody(target, `difference() {\n${children}\n}`, comment);
-      infos.delete(target);
       continue;
     }
 
@@ -1163,7 +1232,16 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
       const node = extrudeNode(feature, fn, sketchNames);
       if (!node) continue;
       if (feature.operation === 'new_body' || !feature.operation) {
-        for (const name of feature.bodies) setBody(name, node, comment);
+        for (const name of feature.bodies) {
+          setBody(name, node, comment);
+          if (feature.bodies.length === 1) {
+            const info = extrudeBoxInfo(feature, numericParams);
+            if (info) {
+              infos.set(name, info);
+              boxLike.add(name);
+            }
+          }
+        }
         continue;
       }
       if (!['join', 'cut', 'intersect'].includes(feature.operation)) {
@@ -1201,21 +1279,283 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
       continue;
     }
 
-    if (feature.kind === 'move') {
-      if (feature.copy) {
+    if (feature.kind === 'torus') {
+      if (feature.operation !== 'new_body' && feature.operation !== '') {
         diagnostics.push({
-          code: 'E111',
+          code: 'E110',
           severity: 'error',
-          message: 'Move with copy is not supported in M1.',
+          message: `Torus operation "${feature.operation}" is not supported yet.`,
           featureId: feature.id,
           featureName: feature.name,
         });
+        continue;
+      }
+      const node = `translate(${vec(feature.center)}) rotate_extrude($fn = ${fn}) translate([${expr(feature.major)}, 0, 0]) circle(r = ${expr(feature.minor)}, $fn = ${fn});`;
+      for (const name of feature.bodies) setBody(name, node, comment);
+      continue;
+    }
+
+    if (feature.kind === 'mirror') {
+      const normal = vec(feature.normal);
+      const origin = vec(feature.origin);
+      const inverseOrigin = `[${feature.origin.map((value) => `-(${expr(value)})`).join(', ')}]`;
+      for (const name of feature.bodies) {
+        const current = bodies.get(name);
+        if (!current) {
+          diagnostics.push(missing(feature, name));
+          continue;
+        }
+        const mirrored = `translate(${origin}) mirror(${normal}) translate(${inverseOrigin}) {\n${indent(current, 1)}\n}`;
+        if (feature.combine) {
+          setBody(
+            name,
+            `union() {\n${indent(current, 1)}\n${indent(mirrored, 1)}\n}`,
+            comment,
+          );
+        } else {
+          let newName = `${name} (2)`;
+          let suffix = 3;
+          while (bodies.has(newName)) {
+            newName = `${name} (${suffix})`;
+            suffix += 1;
+          }
+          setBody(newName, mirrored, comment);
+        }
+        infos.delete(name);
+        boxLike.delete(name);
+      }
+      continue;
+    }
+
+    if (feature.kind === 'pattern_rect') {
+      const count1Text = expr(feature.count1);
+      const count2Text = feature.count2 ? expr(feature.count2) : '1';
+      const count1 = evalArithmetic(count1Text, numericParams);
+      const count2 = evalArithmetic(count2Text, numericParams);
+      const spacing1 = expr(feature.spacing1);
+      const spacing2 = feature.spacing2 ? expr(feature.spacing2) : '0';
+      const dir1 = feature.dir1.map((value) => expr(value));
+      const dir2 = (feature.dir2 ?? ['0', '0', '0']).map((value) => expr(value));
+      if (count1 === null || count2 === null) {
+        diagnostics.push({
+          code: 'E128',
+          severity: 'warning',
+          message: 'Rectangular pattern counts must be numeric to emit separate bodies; using a single union.',
+          featureId: feature.id,
+          featureName: feature.name,
+        });
+        const loops = `for (i = [0 : (${count1Text}) - 1]) {\n  translate([${dir1.map((value) => `(${value}) * (${spacing1}) * i`).join(', ')}]) {\n${indent(bodies.get(feature.bodies[0]) ?? '', 2)}\n  }\n}`;
+        for (const name of feature.bodies) {
+          const current = bodies.get(name);
+          if (!current) continue;
+          setBody(name, `union() {\n${indent(loops, 1)}\n}`, comment);
+          infos.delete(name);
+          boxLike.delete(name);
+        }
         continue;
       }
       for (const name of feature.bodies) {
         const current = bodies.get(name);
         if (!current) {
           diagnostics.push(missing(feature, name));
+          continue;
+        }
+        const info = infos.get(name);
+        const isBox = boxLike.has(name);
+        let suffix = 2;
+        for (let i = 0; i < count1; i += 1) {
+          for (let j = 0; j < count2; j += 1) {
+            if (i === 0 && j === 0) continue;
+            let copyName = `${name} (${suffix})`;
+            while (bodies.has(copyName)) {
+              suffix += 1;
+              copyName = `${name} (${suffix})`;
+            }
+            suffix += 1;
+            const shifts = [0, 1, 2].map(
+              (axis) =>
+                `(${dir1[axis]}) * (${spacing1}) * ${i} + (${dir2[axis]}) * (${spacing2}) * ${j}`,
+            );
+            const transformed = `translate([${shifts.join(', ')}]) {\n${indent(current, 1)}\n}`;
+            setBody(copyName, transformed, comment);
+            if (info) {
+              infos.set(copyName, shiftBox(info, shifts as [string, string, string]));
+              if (isBox) boxLike.add(copyName);
+            }
+          }
+        }
+      }
+      continue;
+    }
+
+    if (feature.kind === 'pattern_circ') {
+      const countText = expr(feature.count);
+      const angleText = expr(feature.angle);
+      const count = evalArithmetic(countText, numericParams);
+      const angleNumber = evalArithmetic(angleText, numericParams);
+      const axis = vec(feature.axis);
+      const origin = vec(feature.origin);
+      const inverseOrigin = `[${feature.origin.map((value) => `-(${expr(value)})`).join(', ')}]`;
+      const step =
+        angleNumber !== null && Math.abs(angleNumber - 360) < 1e-6
+          ? `(${angleText}) / (${countText})`
+          : `(${angleText}) / ((${countText}) - 1)`;
+      if (count === null || count < 1) {
+        diagnostics.push({
+          code: 'E128',
+          severity: 'warning',
+          message: 'Circular pattern count must be numeric to emit separate bodies; using a single union.',
+          featureId: feature.id,
+          featureName: feature.name,
+        });
+        const loop = `for (i = [0 : (${countText}) - 1]) {\n  translate(${origin}) rotate(a = (${step}) * i, v = ${axis}) translate(${inverseOrigin}) {\n${indent(bodies.get(feature.bodies[0]) ?? '', 2)}\n  }\n}`;
+        for (const name of feature.bodies) {
+          const current = bodies.get(name);
+          if (!current) continue;
+          setBody(name, `union() {\n${indent(loop, 1)}\n}`, comment);
+          infos.delete(name);
+          boxLike.delete(name);
+        }
+        continue;
+      }
+      for (const name of feature.bodies) {
+        const current = bodies.get(name);
+        if (!current) {
+          diagnostics.push(missing(feature, name));
+          continue;
+        }
+        let suffix = 2;
+        for (let i = 1; i < count; i += 1) {
+          let copyName = `${name} (${suffix})`;
+          while (bodies.has(copyName)) {
+            suffix += 1;
+            copyName = `${name} (${suffix})`;
+          }
+          suffix += 1;
+          const transformed = `translate(${origin}) rotate(a = (${step}) * ${i}, v = ${axis}) translate(${inverseOrigin}) {\n${indent(current, 1)}\n}`;
+          setBody(copyName, transformed, comment);
+        }
+      }
+      continue;
+    }
+
+    if (feature.kind === 'coil') {
+      if (feature.operation !== 'new_body' && feature.operation !== '') {
+        diagnostics.push({
+          code: 'E110',
+          severity: 'error',
+          message: `Coil operation "${feature.operation}" is not supported yet.`,
+          featureId: feature.id,
+          featureName: feature.name,
+        });
+        continue;
+      }
+      usesBosl2 = true;
+      const radius = `(${expr(feature.diameter)}) / 2`;
+      const profile =
+        feature.section === 'square'
+          ? `square(${expr(feature.sectionSize)}, center = true)`
+          : feature.section === 'circular'
+            ? `circle(d = ${expr(feature.sectionSize)}, $fn = ${fn})`
+            : null;
+      if (!profile) {
+        diagnostics.push({
+          code: 'E110',
+          severity: 'error',
+          message: `Coil section "${feature.section}" is not supported yet.`,
+          featureId: feature.id,
+          featureName: feature.name,
+        });
+        continue;
+      }
+      const turnsText = expr(feature.turns);
+      const heightText = expr(feature.height);
+      const samples = `((${turnsText}) * 64)`;
+      const startAngle = feature.startAngle ? expr(feature.startAngle) : '0';
+      const direction = feature.clockwise ? '-1' : '1';
+      const angle = `(${startAngle}) + (${direction}) * 360 * (${turnsText}) * i / (${samples})`;
+      const path = `[for (i = [0 : ${samples}]) [(${radius}) * cos(${angle}), (${radius}) * sin(${angle}), (${heightText}) * i / (${samples})]]`;
+      let node = `path_sweep(${profile}, ${path}, closed = false);`;
+      const rotation = axisRotation(feature.axis);
+      if (rotation) node = `${rotation} {\n${indent(node, 1)}\n}`;
+      if (!zeroVec(feature.base)) {
+        node = `translate(${vec(feature.base)}) {\n${indent(node, 1)}\n}`;
+      }
+      for (const name of feature.bodies) setBody(name, node, comment);
+      continue;
+    }
+
+    if (feature.kind === 'bounding') {
+      const bounds = feature.targetBodies
+        .map((name) => part.bodyBounds?.[name])
+        .filter((value): value is { min: [number, number, number]; max: [number, number, number] } => Boolean(value));
+      if (bounds.length === 0) {
+        diagnostics.push({
+          code: 'E127',
+          severity: 'error',
+          message: 'Bounding solid has no measured target bodies.',
+          featureId: feature.id,
+          featureName: feature.name,
+        });
+        continue;
+      }
+      const min = [0, 1, 2].map((axis) => Math.min(...bounds.map((bound) => bound.min[axis])));
+      const max = [0, 1, 2].map((axis) => Math.max(...bounds.map((bound) => bound.max[axis])));
+      const margin = feature.margin ? expr(feature.margin) : '0';
+      const low = min.map((value) => `(${value}) - (${margin})`);
+      const size = max.map(
+        (value, axis) => `(${value}) - (${min[axis]}) + 2 * (${margin})`,
+      );
+      const node = `translate([${low.join(', ')}]) cube([${size.join(', ')}]);`;
+      const info: BoxInfo = {
+        x0: low[0], x1: `(${low[0]}) + (${size[0]})`,
+        y0: low[1], y1: `(${low[1]}) + (${size[1]})`,
+        z0: low[2], z1: `(${low[2]}) + (${size[2]})`,
+      };
+      for (const name of feature.bodies) {
+        setBody(name, node, comment);
+        infos.set(name, info);
+        boxLike.add(name);
+      }
+      continue;
+    }
+
+    if (feature.kind === 'move') {
+      for (const name of feature.bodies) {
+        const current = bodies.get(name);
+        if (!current) {
+          diagnostics.push(missing(feature, name));
+          continue;
+        }
+        let transformed = current;
+        if (feature.axis && feature.angle) {
+          transformed = wrap(
+            `rotate(a = ${expr(feature.angle)}, v = ${vec(feature.axis)})`,
+            transformed,
+          );
+        }
+        if (feature.translate && !zeroVec(feature.translate)) {
+          transformed = wrap(`translate(${vec(feature.translate)})`, transformed);
+        }
+        if (feature.copy) {
+          let newName = `${name} (2)`;
+          let suffix = 3;
+          while (bodies.has(newName)) {
+            newName = `${name} (${suffix})`;
+            suffix += 1;
+          }
+          setBody(newName, transformed, comment);
+          const info = infos.get(name);
+          if (info && feature.translate && !(feature.axis && feature.angle)) {
+            infos.set(newName, shiftBox(info, [
+              expr(feature.translate[0]),
+              expr(feature.translate[1]),
+              expr(feature.translate[2]),
+            ]));
+          }
+          if (!(feature.axis && feature.angle) && boxLike.has(name)) {
+            boxLike.add(newName);
+          }
           continue;
         }
         const info = infos.get(name);
@@ -1228,16 +1568,7 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
         } else {
           infos.delete(name);
         }
-        let transformed = current;
-        if (feature.axis && feature.angle) {
-          transformed = wrap(
-            `rotate(a = ${expr(feature.angle)}, v = ${vec(feature.axis)})`,
-            transformed,
-          );
-        }
-        if (feature.translate && !zeroVec(feature.translate)) {
-          transformed = wrap(`translate(${vec(feature.translate)})`, transformed);
-        }
+        if (feature.axis && feature.angle) boxLike.delete(name);
         setBody(name, transformed, comment);
       }
       continue;
@@ -1264,7 +1595,10 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
         .map((node) => indent(node, 1))
         .join('\n');
       setBody(feature.target, `${op}() {\n${children}\n}`, comment);
-      infos.delete(feature.target);
+      if (feature.operation !== 'cut') {
+        infos.delete(feature.target);
+        boxLike.delete(feature.target);
+      }
       if (!feature.keepTools) {
         for (const tool of feature.tools) {
           bodies.delete(tool);
@@ -1279,6 +1613,7 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
         bodies.delete(name);
         comments.delete(name);
         infos.delete(name);
+        boxLike.delete(name);
       }
       continue;
     }
@@ -1303,6 +1638,7 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
     `// Units: ${part.units}`,
     `// Features: ${part.features.length}`,
     '',
+    ...(usesBosl2 ? ['include <BOSL2/std.scad>;', ''] : []),
     `$fn = ${fn};`,
     '',
   ];
@@ -1322,7 +1658,17 @@ export function emitScad(part: PartIR, options: ScadOptions = {}): ScadResult {
   const sketchSection = sketchBlocks.length ? `${sketchBlocks.join('\n\n')}\n\n` : '';
   const code = `${header.join('\n')}${paramBlock}${sketchSection}${moduleBlocks.join('\n\n')}\n\n${partModule}`;
 
-  return { code, diagnostics, bodies: surviving };
+  if (surviving.length === 0) {
+    diagnostics.push({
+      code: 'W130',
+      severity: 'warning',
+      message: 'No bodies in the design.',
+    });
+  }
+  const bodyModules = Object.fromEntries(
+    surviving.map((name) => [name, moduleNames.get(name) as string]),
+  );
+  return { code, diagnostics, bodies: surviving, bodyModules };
 }
 
 function missingBody(

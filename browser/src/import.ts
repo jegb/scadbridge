@@ -44,6 +44,9 @@ declare global {
 
 export async function exportScad(): Promise<void> {
   const compiled = await compileCurrentDesign();
+  if (compiled.scad.bodies.length === 0) {
+    throw new Error('No geometry to export. Open a SCAD file or add a body.');
+  }
   const errors = compiled.scad.diagnostics.filter((item) => item.severity === 'error');
   if (errors.length > 0) {
     throw new Error(
@@ -55,6 +58,9 @@ export async function exportScad(): Promise<void> {
 
 export async function updateScad(): Promise<{ name: string; wrote: boolean; cancelled?: boolean }> {
   const compiled = await compileCurrentDesign();
+  if (compiled.scad.bodies.length === 0) {
+    throw new Error('No geometry to update. Open a SCAD file or add a body.');
+  }
   const errors = compiled.scad.diagnostics.filter((item) => item.severity === 'error');
   if (errors.length > 0) {
     throw new Error(

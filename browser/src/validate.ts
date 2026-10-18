@@ -107,9 +107,19 @@ export async function renderScad(code: string): Promise<RenderResult> {
     }
     return { stl, log };
   } catch (error) {
-    throw new Error(
-      `OpenSCAD render failed: ${error instanceof Error ? error.message : String(error)}\n${log.slice(-20).join('\n')}`,
-    );
+    const details = log.slice(-20).join('\n');
+    if (details.includes('Current top level object is empty')) {
+      throw new Error(
+        'OpenSCAD produced no geometry. The design has no bodies to validate.',
+      );
+    }
+    const reason =
+      error instanceof Error
+        ? error.message
+        : error && typeof error === 'object'
+          ? `exit ${(error as { status?: number }).status ?? 'unknown'}`
+          : String(error);
+    throw new Error(`OpenSCAD render failed: ${reason}\n${details}`);
   }
 }
 
@@ -298,10 +308,48 @@ export async function validateScad(
   inspection: DesignInspection,
   diagnostics: Diagnostic[] = [],
   tolerance: Tolerance = DEFAULT_TOLERANCE,
+  bodyModules?: Record<string, string>,
 ): Promise<ValidationReport> {
   const reference = referenceMetrics(inspection.bodies);
-  const { stl, log } = await renderScad(code);
-  const generated = parseAsciiStl(stl);
+  const modules = bodyModules ? Object.values(bodyModules) : [];
+  let generated: Metrics;
+  let log: string[] = [];
+  if (modules.length > 1) {
+    const prefix = code.slice(0, code.lastIndexOf('part();'));
+    let volume = 0;
+    let area = 0;
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    const min: [number, number, number] = [Infinity, Infinity, Infinity];
+    const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+    for (const module of modules) {
+      const rendered = await renderScad(`${prefix}${module}();\n`);
+      const metrics = parseAsciiStl(rendered.stl);
+      log = [...log, ...rendered.log];
+      volume += metrics.volume;
+      area += metrics.area;
+      cx += metrics.centroid[0] * metrics.volume;
+      cy += metrics.centroid[1] * metrics.volume;
+      cz += metrics.centroid[2] * metrics.volume;
+      for (let axis = 0; axis < 3; axis += 1) {
+        min[axis] = Math.min(min[axis], metrics.bbox.min[axis]);
+        max[axis] = Math.max(max[axis], metrics.bbox.max[axis]);
+      }
+    }
+    const divisor = volume === 0 ? 1 : volume;
+    generated = {
+      volume,
+      area,
+      bbox: { min, max },
+      centroid: [cx / divisor, cy / divisor, cz / divisor],
+      triangles: 0,
+    };
+  } else {
+    const rendered = await renderScad(code);
+    log = rendered.log;
+    generated = parseAsciiStl(rendered.stl);
+  }
   const comparison = compareMetrics(reference, generated, tolerance);
   const all = [...diagnostics];
   if (!comparison.within) {

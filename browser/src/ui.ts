@@ -309,6 +309,15 @@ export function mountPanel(): Panel {
       });
     } else if (action === 'validate') {
       void run('Validate', async () => {
+        const inspection = await inspectDesign(true);
+        if (inspection.bodies.length === 0) {
+          append(
+            'Nothing to validate: the design has no bodies. Open a SCAD file or create a body.',
+          );
+          status.textContent = 'empty';
+          dot.className = 'scadb-dot';
+          return;
+        }
         const result = await validateCurrentDesign();
         refreshCode(result.scad.code);
         showDiagnostics(result.validation.diagnostics);
@@ -324,6 +333,15 @@ export function mountPanel(): Panel {
       });
     } else if (action === 'update') {
       void run('Update SCAD', async () => {
+        const inspection = await inspectDesign(true);
+        if (inspection.bodies.length === 0) {
+          append(
+            'Nothing to update: the design has no bodies. Open a SCAD file or create a body.',
+          );
+          status.textContent = 'empty';
+          dot.className = 'scadb-dot';
+          return;
+        }
         const result = await updateScad();
         if (result.cancelled) {
           append('Update cancelled.');

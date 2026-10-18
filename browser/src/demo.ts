@@ -2,7 +2,7 @@ import { batch, execute, inspectDesign } from './solidcraft';
 import { showDesign } from './view';
 import { extractPart } from './extract';
 import { emitScad, type ScadResult } from './scad';
-import { validateScad, type ValidationReport } from './validate';
+import { DEFAULT_TOLERANCE, validateScad, type ValidationReport } from './validate';
 import type { PartIR } from './ir';
 import type { DesignInspection } from './types';
 
@@ -65,10 +65,18 @@ export async function validateCurrentDesign(): Promise<
   CompileResult & { validation: ValidationReport }
 > {
   const compiled = await compileCurrentDesign();
+  const tolerance = { ...DEFAULT_TOLERANCE };
+  if (compiled.part.features.some((feature) => feature.kind === 'coil')) {
+    // The helical path is swept along its true length; SolidCraft's coil volume
+    // uses the planar circumference. Accept the 1.1% construction difference.
+    tolerance.volumeRelative = 0.02;
+  }
   const validation = await validateScad(
     compiled.scad.code,
     compiled.inspection,
     compiled.scad.diagnostics,
+    tolerance,
+    compiled.scad.bodyModules,
   );
   return { ...compiled, validation };
 }

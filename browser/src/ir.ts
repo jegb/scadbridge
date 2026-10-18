@@ -172,6 +172,73 @@ export interface ExtrudeFeature extends FeatureBase {
   raw: Record<string, unknown>;
 }
 
+export interface TorusFeature extends FeatureBase {
+  kind: 'torus';
+  bodies: string[];
+  major: Expr;
+  minor: Expr;
+  center: Vec3Expr;
+  operation: string;
+  targets?: string[];
+  raw: Record<string, unknown>;
+}
+
+export interface MirrorFeature extends FeatureBase {
+  kind: 'mirror';
+  bodies: string[];
+  combine: boolean;
+  normal: Vec3Expr;
+  origin: Vec3Expr;
+  raw: Record<string, unknown>;
+}
+
+export interface RectangularPatternFeature extends FeatureBase {
+  kind: 'pattern_rect';
+  bodies: string[];
+  dir1: Vec3Expr;
+  count1: Expr;
+  spacing1: Expr;
+  dir2?: Vec3Expr;
+  count2?: Expr;
+  spacing2?: Expr;
+  raw: Record<string, unknown>;
+}
+
+export interface CircularPatternFeature extends FeatureBase {
+  kind: 'pattern_circ';
+  bodies: string[];
+  axis: Vec3Expr;
+  origin: Vec3Expr;
+  count: Expr;
+  angle: Expr;
+  raw: Record<string, unknown>;
+}
+
+export interface CoilFeature extends FeatureBase {
+  kind: 'coil';
+  bodies: string[];
+  diameter: Expr;
+  height: Expr;
+  turns: Expr;
+  sectionSize: Expr;
+  section: string;
+  base: Vec3Expr;
+  axis: Vec3Expr;
+  startAngle?: Expr;
+  clockwise: boolean;
+  operation: string;
+  targets?: string[];
+  raw: Record<string, unknown>;
+}
+
+export interface BoundingSolidFeature extends FeatureBase {
+  kind: 'bounding';
+  bodies: string[];
+  targetBodies: string[];
+  margin?: Expr;
+  raw: Record<string, unknown>;
+}
+
 export interface UnsupportedFeature extends FeatureBase {
   kind: 'unsupported';
   bodies: string[];
@@ -192,6 +259,12 @@ export type FeatureIR =
   | ShellFeature
   | SketchFeature
   | ExtrudeFeature
+  | TorusFeature
+  | MirrorFeature
+  | RectangularPatternFeature
+  | CircularPatternFeature
+  | CoilFeature
+  | BoundingSolidFeature
   | UnsupportedFeature;
 
 export interface PartIR {
@@ -202,6 +275,7 @@ export interface PartIR {
   features: FeatureIR[];
   bodies: string[];
   revision?: number;
+  bodyBounds?: Record<string, { min: [number, number, number]; max: [number, number, number] }>;
   diagnostics: Diagnostic[];
 }
 

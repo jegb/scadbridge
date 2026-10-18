@@ -134,6 +134,12 @@ async function main() {
       const output = {};
       const cubeSource = ${JSON.stringify(simpleCubeSource)};
       output.connected = !!window.solidcraft;
+      document.querySelector('button[data-action="validate"]')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      output.emptyValidate = {
+        status: document.getElementById('scadb-status')?.textContent,
+        log: document.getElementById('scadb-log')?.textContent.slice(-160),
+      };
       output.nativeHook = typeof window.scadbridgeOpenFile === 'function';
       await window.scadbridge.createTestCube();
       const compiled = await window.scadbridge.compile();
@@ -187,8 +193,12 @@ async function main() {
       output.exportHook = typeof window.scadbridgeExportScad === 'function';
       const bosl2 = await window.scadbridge.render('include <BOSL2/std.scad>; cuboid([10, 10, 10]);');
       output.bosl2 = { stlBytes: bosl2.stl.length, log: bosl2.log.slice(-5) };
-      const runOp = async (name, commands) => {
-        await window.scadbridge.openScad(cubeSource, 'simple_cube.scad');
+      const runOp = async (name, commands, fresh = false) => {
+        if (fresh) {
+          await window.solidcraft.execute('file.new');
+        } else {
+          await window.scadbridge.openScad(cubeSource, 'simple_cube.scad');
+        }
         for (const entry of commands) {
           await window.solidcraft.execute(entry.command, entry.params);
         }
@@ -202,6 +212,15 @@ async function main() {
             .filter((item) => item.severity === 'error')
             .map((item) => item.code),
           ok: validation.validation.ok,
+          comparison: validation.validation.comparison,
+          reference: {
+            volume: validation.validation.reference.volume,
+            area: validation.validation.reference.area,
+          },
+          generated: {
+            volume: validation.validation.generated.volume,
+            area: validation.validation.generated.area,
+          },
         };
       };
       output.ops = [];
@@ -224,6 +243,39 @@ async function main() {
         { command: 'solid.sphere', params: { radius: '5', center: [0, 0, 0], body_name: 'Body1' } },
         { command: 'solid.combine', params: { target: 'scad_1_cube', tools: ['Body1'], operation: 'cut' } },
       ]));
+      output.ops.push(await runOp('torus', [
+        { command: 'solid.torus', params: { major: '10', minor: '2', body_name: 'Torus1' } },
+      ], true));
+      output.ops.push(await runOp('mirror', [
+        { command: 'solid.mirror', params: { bodies: ['scad_1_cube'], combine: true, plane: 'YZ' } },
+      ]));
+      output.ops.push(await runOp('rect_pattern', [
+        { command: 'solid.pattern.rectangular', params: { bodies: ['scad_1_cube'], dir1: [1, 0, 0], count1: 2, spacing1: '20' } },
+      ]));
+      output.ops.push(await runOp('circ_pattern', [
+        { command: 'solid.pattern.circular', params: { bodies: ['scad_1_cube'], axis: 'Z', count: 4, angle: '360' } },
+      ]));
+      output.ops.push(await runOp('coil', [
+        { command: 'solid.coil', params: { diameter: '20', revolutions: 5, height: '50', section_size: '2', body_name: 'Coil1' } },
+      ], true));
+      output.ops.push(await runOp('bounding', [
+        { command: 'solid.bounding_solid', params: { bodies: ['scad_1_cube'], margin: '2', body_name: 'Bounds1' } },
+      ]));
+      output.ops.push(await runOp('fillet_hole', [
+        { command: 'solid.hole', params: { position: [10, 10, 20], diameter: '5' } },
+        { command: 'solid.fillet', params: { edges: [[0, 10, 0]], radius: '2', body: 'scad_1_cube' } },
+      ]));
+      output.ops.push(await runOp('fillet_shell', [
+        { command: 'solid.shell', params: { faces: [[20, 10, 10]], thickness: '2', body: 'scad_1_cube' } },
+        { command: 'solid.fillet', params: { edges: [[0, 10, 0]], radius: '2', body: 'scad_1_cube' } },
+      ]));
+      output.ops.push(await runOp('fillet_extrude', [
+        { command: 'sketch.create', params: { plane: 'XY' } },
+        { command: 'sketch.rectangle.two_point', params: { p0: [0, 0], p1: [20, 20] } },
+        { command: 'sketch.finish', params: {} },
+        { command: 'solid.extrude', params: { distance: '20', body_name: 'Body1' } },
+        { command: 'solid.fillet', params: { edges: [[0, 10, 0]], radius: '2', body: 'Body1' } },
+      ], true));
       output.ops.push(await runOp('extrude_cut', [
         { command: 'sketch.create', params: { plane: 'XY' } },
         { command: 'sketch.rectangle.two_point', params: { p0: [0, 0], p1: [5, 5] } },
@@ -327,6 +379,7 @@ async function main() {
   if (!parsed.chamferScad.validationOk) process.exitCode = 11;
   if (!parsed.chamferScad.wrote || !parsed.chamferScad.writtenHasExtrude) process.exitCode = 12;
   if (!parsed.exportHook) process.exitCode = 13;
+  if (parsed.emptyValidate?.status !== 'empty') process.exitCode = 17;
   if (!(parsed.bosl2.stlBytes > 84)) process.exitCode = 16;
   if (!parsed.ops.every((op) => op.ok && op.errors.length === 0)) process.exitCode = 15;
   if (parsed.uiOpen.name !== 'test_cube.scad') process.exitCode = 7;

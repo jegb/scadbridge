@@ -488,3 +488,84 @@ describe('native sketch polygon', () => {
     expect(result.code).toContain('sketch_1();');
   });
 });
+
+describe('M3 direct operations', () => {
+  it('emits a torus', () => {
+    const part: PartIR = {
+      schemaVersion: '0.1', name: 'torus', units: 'mm', revision: 1, parameters: [],
+      features: [{
+        id: 1, name: 'Torus1', type: 'TorusFeature', kind: 'torus', bodies: ['Torus1'],
+        major: '10', minor: '2', center: ['0', '0', '0'], operation: 'new_body', raw: {},
+      }],
+      bodies: ['Torus1'], diagnostics: [],
+    };
+    const result = emitScad(part);
+    expect(result.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(result.code).toContain('rotate_extrude');
+    expect(result.code).toContain('circle(r = 2');
+  });
+
+  it('mirrors and joins a box', () => {
+    const part = plainBox();
+    part.features.push({
+      id: 2, name: 'Mirror1', type: 'MirrorFeature', kind: 'mirror', bodies: ['box'],
+      combine: true, normal: ['1', '0', '0'], origin: ['0', '0', '0'], raw: {},
+    });
+    const result = emitScad(part);
+    expect(result.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(result.code).toContain('mirror([1, 0, 0])');
+    expect(result.code).toContain('union()');
+  });
+
+  it('emits a rectangular pattern', () => {
+    const part = plainBox();
+    part.features.push({
+      id: 2, name: 'Pattern1', type: 'RectangularPatternFeature', kind: 'pattern_rect',
+      bodies: ['box'], dir1: ['1', '0', '0'], count1: '3', spacing1: '20', raw: {},
+    });
+    const result = emitScad(part);
+    expect(result.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(result.code).toContain('module body_box_2()');
+    expect(result.code).toContain('translate([');
+  });
+
+  it('emits a circular pattern', () => {
+    const part = plainBox();
+    part.features.push({
+      id: 2, name: 'Pattern1', type: 'CircularPatternFeature', kind: 'pattern_circ',
+      bodies: ['box'], axis: ['0', '0', '1'], origin: ['0', '0', '0'], count: '4', angle: '360', raw: {},
+    });
+    const result = emitScad(part);
+    expect(result.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(result.code).toContain('rotate(a =');
+  });
+
+  it('emits a coil', () => {
+    const part: PartIR = {
+      schemaVersion: '0.1', name: 'coil', units: 'mm', revision: 1, parameters: [],
+      features: [{
+        id: 1, name: 'Coil1', type: 'CoilFeature', kind: 'coil', bodies: ['Coil1'],
+        diameter: '20', height: '50', turns: '5', sectionSize: '2', section: 'circular',
+        base: ['0', '0', '0'], axis: ['0', '0', '1'], clockwise: false,
+        operation: 'new_body', raw: {},
+      }],
+      bodies: ['Coil1'], diagnostics: [],
+    };
+    const result = emitScad(part);
+    expect(result.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(result.code).toContain('include <BOSL2/std.scad>');
+    expect(result.code).toContain('path_sweep(circle(');
+  });
+
+  it('emits a bounding solid', () => {
+    const part = plainBox();
+    part.bodyBounds = { box: { min: [0, 0, 0], max: [10, 10, 10] } };
+    part.features.push({
+      id: 2, name: 'Bounds1', type: 'BoundingSolidFeature', kind: 'bounding',
+      bodies: ['Bounds'], targetBodies: ['box'], margin: '2', raw: {},
+    });
+    const result = emitScad(part);
+    expect(result.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(result.code).toContain('cube([');
+  });
+});

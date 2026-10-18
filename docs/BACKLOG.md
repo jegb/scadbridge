@@ -18,7 +18,7 @@ Updated 18 October 2026. Browser-only strategy. Blender is future work.
 | M0 Connectivity and inspection | Done | Chamfer feature retrieved before and after parameter changes |
 | M1 Minimal compiler and validation | Done | Test cube compiles, validates, and survives a parameter change |
 | M2 Chamfer round-trip | Done for box edges | Chamfer survives width and distance changes in generated SCAD |
-| M3 Extended operations | In progress | Sketch polygons, holes, fillets, shells, booleans, simple extrusions and BOSL2 dependency done; patterns, revolve, loft, sweep, pipe and others open |
+| M3 Extended operations | In progress | Sketch polygons, holes, fillets, shells, booleans, trims, patterns, torus, coil, bounding solids and BOSL2 done; revolve, sweep, loft, pipe, thread and others open |
 | M4 Production integration | Planned | Version guard, provenance, CI, packaging |
 | M5 Reverse SCAD import | Partial | SCAD test cube imported and written back |
 | Future Blender pipeline | Parked | Revisit after M2 |
@@ -98,25 +98,25 @@ M1 evidence from the smoke test:
 | SB-307 | Sketch as native 2D polygon | Done | `polygon()`/`circle()` modules; extrude references them |
 | SB-308 | BOSL2 dependency | Done | 68-file BSD-2 bundle, mounted in OpenSCAD WASM, native symlink |
 | SB-309 | Revolve | Open | `rotate_extrude()` |
-| SB-310 | Torus | Open | `rotate_extrude()` of a circle |
-| SB-311 | Mirror | Open | Native `mirror()` |
-| SB-312 | Rectangular pattern | Open | `for` + `translate()` |
-| SB-313 | Circular pattern | Open | `for` + `rotate()` |
+| SB-310 | Torus | Done | `rotate_extrude()` of a circle; 789.45 mm³ fixture passes |
+| SB-311 | Mirror | Done | Native `mirror()`, combine and separate copy; 16000 mm³ fixture passes |
+| SB-312 | Rectangular pattern | Done | Separate bodies named like SolidCraft; 16000 mm³ fixture passes |
+| SB-313 | Circular pattern | Done | Separate bodies; 32000 mm³ fixture passes |
 | SB-314 | Pattern on path | Open | BOSL2 `path_sweep`/`distribute` |
 | SB-315 | Sweep | Open | BOSL2 `sweep`/`path_sweep` |
 | SB-316 | Loft | Open | BOSL2 `skin`/`loft`; closes imported hull write-back |
 | SB-317 | Pipe | Open | Direct difference for straight, BOSL2 for bends |
-| SB-318 | Bounding solid | Open | Measured cube |
+| SB-318 | Bounding solid | Done | Measured cube and per-body validation; 21824 mm³ fixture passes |
 | SB-319 | Thread | Open | BOSL2 threading |
 | SB-320 | Boundary fill | Open | Boolean intersection/union |
-| SB-321 | Coil | Open | `linear_extrude(twist=...)` / BOSL2 |
+| SB-321 | Coil | Done | BOSL2 `path_sweep` along a helix; 986.47 mm³ fixture passes at 2% volume tolerance |
 | SB-322 | Rib | Open | Generated profile extrusion + boolean |
 | SB-323 | Web | Open | Repeated ribs/lofts |
 | SB-324 | Emboss | Open | `text()`/profile + extrusion + boolean |
 | SB-325 | Joint origin | Out of scope | Assembly constraint, not part geometry |
 | SB-326 | Sketch arcs, splines and holes | Open | Tessellate or BOSL2 path handling |
 | SB-327 | Multi-profile extrusions | Open | Multiple outer loops and holes |
-| SB-328 | Pattern/mirror/copy body creation | Open | Body-producing features for later combines |
+| SB-328 | Pattern/mirror/copy body creation | Done | Move copies, mirror copies and pattern copies become separate named bodies |
 
 M3 evidence from the browser smoke test:
 
@@ -126,6 +126,13 @@ M3 evidence from the browser smoke test:
 - Primitive boolean cut: 7434.61 mm³, validation PASS.
 - Chamfer remains 7960.00 mm³, validation PASS.
 - Sketch extrusion cut into the cube: 7875.00 mm³, validation PASS.
+
+M3 UAT evidence:
+
+- Sketch, extrude, hole, counterbore, chamfer, fillet (plain, after hole, after shell, on extrusion), shell, sphere cut, boolean cut/join, extrude cut: volumes match and validation passes.
+- Torus 789.45, mirror 16000, rectangular pattern 16000, circular pattern 32000, bounding 21824: validation passes.
+- Coil 986.47 mm³ reference, 997.42 mm³ generated (1.1% helix-length difference), accepted at 2% volume tolerance.
+- Multi-body validation renders each body separately, matching SolidCraft's per-body area and volume totals.
 
 ## M4 Production integration
 
