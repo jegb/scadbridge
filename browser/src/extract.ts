@@ -1149,6 +1149,7 @@ export async function extractPart(
     const measured = await measureBodies(needMeasure).catch(() => []);
     for (const body of measured) measurements.set(body.name, body);
   }
+  const historyRecovered = new Set<string>();
   const historyNames = missingNames.filter((name) => !measurements.has(name));
   if (historyNames.length > 0) {
     const history = await captureBodyHistory(inspection);
@@ -1156,6 +1157,7 @@ export async function extractPart(
       const body = history.get(name);
       if (!body) continue;
       measurements.set(name, body);
+      historyRecovered.add(name);
       diagnostics.push({
         code: 'W139',
         severity: 'info',
@@ -1197,6 +1199,7 @@ export async function extractPart(
   }
   for (const body of measurements.values()) {
     if (aliasNames.has(body.name)) continue;
+    if (historyRecovered.has(body.name)) continue;
     if (!inspection.bodies.some((existing) => existing.name === body.name)) {
       inspection.bodies.push(body);
     }
