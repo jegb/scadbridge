@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { PartIR } from './ir';
 import { emitScad, sanitizeExpression } from './scad';
+import { inferCavitySphere } from './extract';
 import { parseAsciiStl } from './validate';
+import type { BodyMeasurement, FaceInfo } from './types';
 
 function testCube(): PartIR {
   return {
@@ -567,5 +569,44 @@ describe('M3 direct operations', () => {
     const result = emitScad(part);
     expect(result.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
     expect(result.code).toContain('cube([');
+  });
+});
+
+
+describe('spherical cavity recovery', () => {
+  const faces = (area: number): FaceInfo[] => [
+    [14.129, 10, 10],
+    [5.871, 10, 10],
+    [10, 14.129, 10],
+    [10, 5.871, 10],
+    [10, 10, 14.129],
+    [10, 10, 5.871],
+  ].map((centroid, index) => ({
+    index,
+    area,
+    centroid: centroid as [number, number, number],
+    plane_normal: null,
+  }));
+
+  const target = (volume: number): BodyMeasurement => ({
+    name: 'Cube',
+    volume_mm3: volume,
+    area_mm2: 2700,
+    center_of_mass: [10, 10, 10],
+    bbox: { min: [0, 0, 0], max: [20, 20, 20] },
+  });
+
+  it('recovers a full internal sphere from its patch areas', () => {
+    const cavity = inferCavitySphere(target(7476.550423002228), faces(51.85098278171367));
+    expect(cavity).not.toBeNull();
+    expect(cavity?.radius).toBeCloseTo(5, 3);
+    expect(cavity?.center[0]).toBeCloseTo(10, 6);
+    expect(cavity?.center[1]).toBeCloseTo(10, 6);
+    expect(cavity?.center[2]).toBeCloseTo(10, 6);
+  });
+
+  it('rejects a partial cavity', () => {
+    const cavity = inferCavitySphere(target(8000 - 523.5987755982988 / 8), faces(51.85098278171367 / 8));
+    expect(cavity).toBeNull();
   });
 });

@@ -3,10 +3,11 @@ import type {
   ComponentList,
   DesignInspection,
   FeatureInspection,
+  FaceInfo,
   JsonValue,
   SketchInspection,
 } from './types';
-import { execute, inspectFeature, inspectFeatureByName, inspectSketch, listComponents, measureBodies } from './solidcraft';
+import { execute, inspectFeature, inspectFeatureByName, inspectSketch, listComponents, measureBodies, modelFaces } from './solidcraft';
 import type {
   BoxFeature,
   ChamferFeature,
@@ -751,6 +752,115 @@ function inferPrimitive(
 }
 
 
+export function inferCavitySphere(
+  target: BodyMeasurement,
+  faces: FaceInfo[],
+): { radius: number; center: [number, number, number] } | null {
+  const curved = faces.filter((face) => {
+    const normal = face.plane_normal;
+    const flat =
+      Array.isArray(normal) &&
+      Math.hypot(normal[0] ?? 0, normal[1] ?? 0, normal[2] ?? 0) > 1e-9;
+    return (
+      !face.cylinder &&
+      !flat &&
+      (face.area ?? 0) > 0 &&
+      Array.isArray(face.centroid)
+    );
+  });
+  if (curved.length === 0) return null;
+  let area = 0;
+  const center: [number, number, number] = [0, 0, 0];
+  for (const face of curved) {
+    const faceArea = face.area ?? 0;
+    const centroid = face.centroid as [number, number, number];
+    area += faceArea;
+    center[0] += centroid[0] * faceArea;
+    center[1] += centroid[1] * faceArea;
+    center[2] += centroid[2] * faceArea;
+  }
+  if (!(area > 0)) return null;
+  center[0] /= area;
+  center[1] /= area;
+  center[2] /= area;
+  const [min, max] = [target.bbox.min, target.bbox.max];
+  const bboxVolume =
+    (max[0] - min[0]) * (max[1] - min[1]) * (max[2] - min[2]);
+  const removed = bboxVolume - target.volume_mm3;
+  if (!(removed > 0)) return null;
+  const radiusFromVolume = Math.cbrt((3 * removed) / (4 * Math.PI));
+  const radiusFromArea = Math.sqrt(area / (4 * Math.PI));
+  const areaFromVolume = 4 * Math.PI * radiusFromVolume * radiusFromVolume;
+  const volumeFromArea =
+    (4 / 3) * Math.PI * radiusFromArea * radiusFromArea * radiusFromArea;
+  const areaMismatch =
+    Math.abs(area - areaFromVolume) / Math.max(areaFromVolume, 1);
+  const volumeMismatch =
+    Math.abs(volumeFromArea - removed) / Math.max(removed, 1);
+  if (areaMismatch > 0.1 && volumeMismatch > 0.1) return null;
+  const radius = areaMismatch <= 0.1 ? radiusFromVolume : radiusFromArea;
+  return { radius, center };
+}
+
+async function inferCutTool(
+  name: string,
+  features: FeatureIR[],
+  measurements: Map<string, BodyMeasurement>,
+  id: number,
+  diagnostics: Diagnostic[],
+): Promise<FeatureIR | null> {
+  const combine = features.find(
+    (feature): feature is CombineFeature =>
+      feature.kind === 'combine' &&
+      feature.operation === 'cut' &&
+      feature.tools.includes(name),
+  );
+  if (!combine) return null;
+  let target = measurements.get(combine.target);
+  if (!target) {
+    const measured = await measureBodies([combine.target]).catch(() => []);
+    target = measured[0];
+  }
+  if (!target) return null;
+  const faces = await modelFaces(combine.target).catch(() => []);
+  const cavity = inferCavitySphere(target, faces);
+  if (!cavity) {
+    const curvedCount = faces.filter((face) => {
+      const normal = face.plane_normal;
+      const flat =
+        Array.isArray(normal) &&
+        Math.hypot(normal[0] ?? 0, normal[1] ?? 0, normal[2] ?? 0) > 1e-9;
+      return !face.cylinder && !flat;
+    }).length;
+    const bboxVolume =
+      (target.bbox.max[0] - target.bbox.min[0]) *
+      (target.bbox.max[1] - target.bbox.min[1]) *
+      (target.bbox.max[2] - target.bbox.min[2]);
+    diagnostics.push({
+      code: 'W138',
+      severity: 'warning',
+      message: `Cut tool ${name} is gone and the cavity in ${combine.target} could not be reconstructed as a sphere (volume ${target.volume_mm3.toFixed(2)}, bbox volume ${bboxVolume.toFixed(2)}, faces ${faces.length}, curved ${curvedCount}).`,
+    });
+    return null;
+  }
+  diagnostics.push({
+    code: 'W137',
+    severity: 'info',
+    message: `Reconstructed cut tool ${name} from the spherical cavity in ${combine.target}: radius ${cavity.radius.toFixed(4)} mm at [${cavity.center.map((value) => value.toFixed(4)).join(', ')}].`,
+  });
+  return {
+    id,
+    name: `Inferred ${name}`,
+    type: 'SphereFeature',
+    kind: 'sphere',
+    bodies: [name],
+    radius: cavity.radius.toFixed(6),
+    center: cavity.center.map((value) => value.toFixed(6)) as Vec3Expr,
+    operation: 'new_body',
+    raw: { inferred: true, cavity: true },
+  };
+}
+
 async function extractComponentFeatures(
   rootFeatureNames: Set<string>,
   diagnostics: Diagnostic[],
@@ -1014,6 +1124,19 @@ export async function extractPart(
   for (const name of missingNames) {
     const body = measurements.get(name);
     if (!body) {
+      const reconstructed = await inferCutTool(
+        name,
+        features,
+        measurements,
+        inferredId,
+        diagnostics,
+      );
+      if (reconstructed) {
+        inferredId -= 1;
+        features.unshift(reconstructed);
+        inferredBodies.push(name);
+        continue;
+      }
       diagnostics.push({
         code: 'W134',
         severity: 'warning',
