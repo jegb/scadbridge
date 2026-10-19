@@ -7,7 +7,7 @@ import type {
   JsonValue,
   SketchInspection,
 } from './types';
-import { execute, inspectFeature, inspectFeatureByName, inspectSketch, listComponents, measureBodies, modelFaces } from './solidcraft';
+import { execute, inspectDesign, inspectFeature, inspectFeatureByName, inspectSketch, listComponents, measureBodies, modelFaces, rollTo } from './solidcraft';
 import type {
   BoxFeature,
   ChamferFeature,
@@ -758,12 +758,13 @@ export function inferCavitySphere(
 ): { radius: number; center: [number, number, number] } | null {
   const curved = faces.filter((face) => {
     const normal = face.plane_normal;
-    const flat =
+    const hasNormal =
       Array.isArray(normal) &&
       Math.hypot(normal[0] ?? 0, normal[1] ?? 0, normal[2] ?? 0) > 1e-9;
+    const definitelyPlanar = face.exact !== false && hasNormal;
     return (
       !face.cylinder &&
-      !flat &&
+      !definitelyPlanar &&
       (face.area ?? 0) > 0 &&
       Array.isArray(face.centroid)
     );
@@ -802,6 +803,30 @@ export function inferCavitySphere(
   return { radius, center };
 }
 
+async function captureBodyHistory(
+  inspection: DesignInspection,
+): Promise<Map<string, BodyMeasurement>> {
+  const history = new Map<string, BodyMeasurement>();
+  try {
+    for (const item of inspection.timeline) {
+      if (item.rolled_back) continue;
+      try {
+        await rollTo(item.id);
+        const state = await inspectDesign(true);
+        for (const body of state.bodies) {
+          if (body.visible === false) continue;
+          history.set(body.name, body);
+        }
+      } catch {
+        // A step that cannot be rolled to is skipped; the final inspection remains authoritative.
+      }
+    }
+  } finally {
+    await rollTo().catch(() => {});
+  }
+  return history;
+}
+
 async function inferCutTool(
   name: string,
   features: FeatureIR[],
@@ -825,13 +850,18 @@ async function inferCutTool(
   const faces = await modelFaces(combine.target).catch(() => []);
   const cavity = inferCavitySphere(target, faces);
   if (!cavity) {
-    const curvedCount = faces.filter((face) => {
+    const curvedFaces = faces.filter((face) => {
       const normal = face.plane_normal;
-      const flat =
+      const hasNormal =
         Array.isArray(normal) &&
         Math.hypot(normal[0] ?? 0, normal[1] ?? 0, normal[2] ?? 0) > 1e-9;
-      return !face.cylinder && !flat;
-    }).length;
+      return !face.cylinder && !(face.exact !== false && hasNormal);
+    });
+    const curvedCount = curvedFaces.length;
+    const curvedArea = curvedFaces.reduce(
+      (sum, face) => sum + (face.area ?? 0),
+      0,
+    );
     const bboxVolume =
       (target.bbox.max[0] - target.bbox.min[0]) *
       (target.bbox.max[1] - target.bbox.min[1]) *
@@ -839,7 +869,7 @@ async function inferCutTool(
     diagnostics.push({
       code: 'W138',
       severity: 'warning',
-      message: `Cut tool ${name} is gone and the cavity in ${combine.target} could not be reconstructed as a sphere (volume ${target.volume_mm3.toFixed(2)}, bbox volume ${bboxVolume.toFixed(2)}, faces ${faces.length}, curved ${curvedCount}).`,
+      message: `Cut tool ${name} is gone and the cavity in ${combine.target} could not be reconstructed as a sphere (volume ${target.volume_mm3.toFixed(2)}, bbox volume ${bboxVolume.toFixed(2)}, faces ${faces.length}, curved ${curvedCount}, curved area ${curvedArea.toFixed(2)}).`,
     });
     return null;
   }
@@ -1118,6 +1148,20 @@ export async function extractPart(
   if (needMeasure.length > 0) {
     const measured = await measureBodies(needMeasure).catch(() => []);
     for (const body of measured) measurements.set(body.name, body);
+  }
+  const historyNames = missingNames.filter((name) => !measurements.has(name));
+  if (historyNames.length > 0) {
+    const history = await captureBodyHistory(inspection);
+    for (const name of historyNames) {
+      const body = history.get(name);
+      if (!body) continue;
+      measurements.set(name, body);
+      diagnostics.push({
+        code: 'W139',
+        severity: 'info',
+        message: `Recovered body ${name} from the step before it was consumed (volume ${body.volume_mm3.toFixed(2)} mm3).`,
+      });
+    }
   }
   const inferredBodies: string[] = [];
   let inferredId = -1;

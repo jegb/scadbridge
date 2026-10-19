@@ -40,6 +40,13 @@ export async function measureBodies(names: string[]): Promise<BodyMeasurement[]>
   return result.bodies ?? [];
 }
 
+export async function rollTo(feature?: string | number): Promise<void> {
+  await getApi().execute(
+    'timeline.roll_to',
+    feature === undefined ? {} : { feature },
+  );
+}
+
 export async function modelFaces(body: string): Promise<FaceInfo[]> {
   const result = (await getApi().execute('model.faces', { body })) as {
     faces?: FaceInfo[];
