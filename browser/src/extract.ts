@@ -754,6 +754,7 @@ function inferPrimitive(
 async function extractComponentFeatures(
   rootFeatureNames: Set<string>,
   diagnostics: Diagnostic[],
+  requiredBodies: Set<string>,
 ): Promise<FeatureIR[]> {
   const components = await listComponents().catch(() => ({
     active: 0,
@@ -775,9 +776,23 @@ async function extractComponentFeatures(
         });
         continue;
       }
-      if (detail.suppressed || detail.rolled_back) continue;
+      if (detail.rolled_back) continue;
       if (detail.type === 'Sketch' || detail.type === 'BodyTransferFeature') continue;
       if (detail.type === 'CombineFeature') continue;
+      const detailBodies = bodyNamesOf(detail.definition ?? {});
+      if (
+        detail.suppressed &&
+        !detailBodies.some((body) => requiredBodies.has(body))
+      ) {
+        continue;
+      }
+      if (detail.suppressed) {
+        diagnostics.push({
+          code: 'W135',
+          severity: 'info',
+          message: `Using suppressed component feature ${name} (${detail.type}) to recreate referenced body ${detailBodies.join(', ')}.`,
+        });
+      }
       if (detail.type === 'ExtrudeFeature') {
         const sketchId = Number(detail.definition?.sketch);
         const sketch = await inspectSketch(sketchId);
@@ -893,6 +908,7 @@ export async function extractPart(
     const componentFeatures = await extractComponentFeatures(
       new Set(features.map((feature) => feature.name)),
       diagnostics,
+      new Set(missingReferenced),
     );
     if (componentFeatures.length > 0) {
       features.unshift(...componentFeatures);
@@ -920,13 +936,64 @@ export async function extractPart(
     if (component.id === 0) continue;
     for (const body of component.bodies ?? []) candidates.add(body);
   }
-  const properties = await execute<{ bodies?: Array<{ name: string }> }>(
-    'component.properties',
-    {},
-  ).catch(() => null);
+  const properties = await execute<{
+    bodies?: Array<{
+      name: string;
+      volume_mm3: number;
+      area_mm2: number;
+      center_of_mass: [number, number, number];
+      bbox: { min: [number, number, number]; max: [number, number, number] };
+    }>;
+  }>('component.properties', {}).catch(() => null);
   for (const body of properties?.bodies ?? []) candidates.add(body.name);
   const measurements = new Map<string, BodyMeasurement>();
   for (const body of inspection.bodies) measurements.set(body.name, body);
+  const sameBbox = (
+    a: BodyMeasurement['bbox'],
+    b: BodyMeasurement['bbox'],
+  ): boolean =>
+    Math.abs(a.min[0] - b.min[0]) < 1e-3 &&
+    Math.abs(a.min[1] - b.min[1]) < 1e-3 &&
+    Math.abs(a.min[2] - b.min[2]) < 1e-3 &&
+    Math.abs(a.max[0] - b.max[0]) < 1e-3 &&
+    Math.abs(a.max[1] - b.max[1]) < 1e-3 &&
+    Math.abs(a.max[2] - b.max[2]) < 1e-3;
+  const aliasNames = new Set<string>();
+  for (const missing of missingReferenced) {
+    if (measurements.has(missing)) continue;
+    const propertyBody = properties?.bodies?.find(
+      (body) => body.name === missing,
+    );
+    if (!propertyBody) continue;
+    const target = inspection.bodies.find(
+      (body) =>
+        body.name !== missing &&
+        !created.has(body.name) &&
+        !referenced.has(body.name) &&
+        sameBbox(body.bbox, propertyBody.bbox) &&
+        Math.abs(body.volume_mm3 - propertyBody.volume_mm3) /
+          Math.max(propertyBody.volume_mm3, 1) <
+          1e-4,
+    );
+    if (target) {
+      measurements.set(missing, { ...target, name: missing });
+      aliasNames.add(missing);
+      candidates.delete(target.name);
+      diagnostics.push({
+        code: 'W136',
+        severity: 'info',
+        message: `Body ${missing} was matched to inspected body ${target.name} by geometry.`,
+      });
+    } else {
+      measurements.set(missing, {
+        name: missing,
+        volume_mm3: propertyBody.volume_mm3,
+        area_mm2: propertyBody.area_mm2,
+        center_of_mass: propertyBody.center_of_mass,
+        bbox: propertyBody.bbox,
+      });
+    }
+  }
   const escaped = [...rootCreated].map((name) =>
     name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
   );
@@ -962,6 +1029,7 @@ export async function extractPart(
     }
   }
   for (const body of measurements.values()) {
+    if (aliasNames.has(body.name)) continue;
     if (!inspection.bodies.some((existing) => existing.name === body.name)) {
       inspection.bodies.push(body);
     }
