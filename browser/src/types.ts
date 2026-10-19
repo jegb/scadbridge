@@ -89,6 +89,17 @@ export interface SketchInspection {
   status?: string;
 }
 
+export interface FaceInfo {
+  index: number;
+  name?: string;
+  exact?: boolean;
+  area?: number;
+  centroid?: [number, number, number];
+  plane_normal?: [number, number, number] | null;
+  point?: [number, number, number];
+  cylinder?: { origin: [number, number, number]; axis: [number, number, number]; radius: number };
+}
+
 export interface ComponentBody {
   name: string;
   component?: number;

@@ -1,11 +1,4 @@
-import type {
-  BodyMeasurement,
-  ComponentList,
-  DesignInspection,
-  FeatureInspection,
-  SketchInspection,
-  SolidCraftApi,
-} from './types';
+import type { BodyMeasurement, ComponentList, DesignInspection, FeatureInspection, SketchInspection, SolidCraftApi, FaceInfo } from './types';
 
 export class SolidCraftError extends Error {}
 
@@ -45,6 +38,13 @@ export async function measureBodies(names: string[]): Promise<BodyMeasurement[]>
     bodies: names,
   })) as { bodies?: BodyMeasurement[] };
   return result.bodies ?? [];
+}
+
+export async function modelFaces(body: string): Promise<FaceInfo[]> {
+  const result = (await getApi().execute('model.faces', { body })) as {
+    faces?: FaceInfo[];
+  };
+  return result.faces ?? [];
 }
 
 export async function inspectFeatureByName(name: string): Promise<FeatureInspection> {
