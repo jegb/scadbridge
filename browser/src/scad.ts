@@ -335,9 +335,9 @@ function chamferCutter(
 ): string | null {
   if (!Array.isArray(edge) || edge.length !== 3 || edge.some((value) => typeof value !== 'number')) {
     diagnostics.push({
-      code: 'E121',
-      severity: 'error',
-      message: 'Chamfer edges must be three-component midpoints.',
+      code: 'W121',
+      severity: 'warning',
+      message: 'Chamfer edge skipped: edges must be three-component midpoints.',
       featureId: feature.id,
       featureName: feature.name,
     });
@@ -356,9 +356,9 @@ function chamferCutter(
   ];
   if (mins.some((value) => value === null) || maxs.some((value) => value === null)) {
     diagnostics.push({
-      code: 'E121',
-      severity: 'error',
-      message: 'Chamfer emission needs numeric box bounds and parameters.',
+      code: 'W121',
+      severity: 'warning',
+      message: 'Chamfer edge skipped: emission needs numeric box bounds and parameters.',
       featureId: feature.id,
       featureName: feature.name,
     });
@@ -389,9 +389,9 @@ function chamferCutter(
       .sort((a, b) => b.score - a.score);
     if (scored[0].score < 0.5 || scored[1].score < 0.5) {
       diagnostics.push({
-        code: 'E121',
-        severity: 'error',
-        message: 'Chamfer emission supports straight edges between two planar box faces.',
+        code: 'W121',
+        severity: 'warning',
+        message: `Chamfer edge at [${values.join(', ')}] skipped: only straight edges between two planar box faces are supported.`,
         featureId: feature.id,
         featureName: feature.name,
       });
